@@ -82,39 +82,47 @@ minutes from clone to first finalized TWAP.
 # 1. WIT deps (one-time per clone).
 task fetch-wit
 
-# 2. Generate the funded deployer + two operator mnemonics, write .env.
+# 2. Get a free CoinGecko Demo API key. Two operators sharing one IP
+#    will hit the unauthenticated 429 limit within minutes. Sign up at
+#    https://www.coingecko.com/en/api/pricing → Demo Account → create
+#    a key (the `CG-…` form). Exporting it BEFORE step 3 makes
+#    bootstrap-keys.sh embed it directly in .env.
+export COINGECKO_API_KEY=CG-xxxxxxxxxxxxxxxx
+
+# 3. Generate the funded deployer + two operator mnemonics, write .env.
 ./scripts/bootstrap-keys.sh > .env
 set -a; source .env; set +a
 
-# 3. Phase 1 — build contracts + components, deploy on-chain stack.
+# 4. Phase 1 — build contracts + components, deploy on-chain stack.
 task deploy
 # -> out/deploy.json (ed25519_security + ed25519_verification + project_root)
 # -> out/oracle.json (the handler — QUORUM defaults to 1/1 = "all operators")
 
-# 4. Start operator 1 — leave running in a SECOND terminal.
+# 5. Start operator 1 — leave running in a SECOND terminal.
 #       cd <repo>
 #       set -a; source .env; set +a
 #       task run-node
 #    Wait for "Stellar chain [stellar:testnet] is healthy" and
 #    "HTTP server bound to port 8000".
 
-# 5. Start operator 2 — leave running in a THIRD terminal.
+# 6. Start operator 2 — leave running in a THIRD terminal.
 #       cd <repo>
 #       set -a; source .env; set +a
 #       OP=2 task run-node
 #    HTTP port 8010, p2p port 9010, data dir out/node-data-2,
 #    signing key from WARPDRIVE_SIGNING_MNEMONIC_2.
 
-# 6. Phase 2 — upload components to BOTH nodes, build service.json,
+# 7. Phase 2 — upload components to BOTH nodes, build service.json
+#    (bakes the API key into the cron-circuit's component config),
 #    activate it on both dispatchers. `wire-service` walks OPERATORS.
 task wire-service
 
-# 7. Register both operators' pubkeys on chain + apply threshold.
+# 8. Register both operators' pubkeys on chain + apply threshold.
 task register-signers
 # Default: weight 100 each, threshold 1/1 ("100 % of total weight"),
 # so a single signature is insufficient and both nodes must agree.
 
-# 8. Hand the oracle contract id to the frontend, then run the UI.
+# 9. Hand the oracle contract id to the frontend, then run the UI.
 task frontend-config
 task frontend-dev    # http://localhost:5173
 ```
@@ -124,6 +132,19 @@ request. Round 2 fills to 2/2 in ~10 s, the contract emits
 `Round2Ready`, both median circuits agree, the aggregator collects
 two signatures of weight 100 each into one envelope, and `Finalized`
 lands in the next ledger close.
+
+**Adding the API key after the fact.** If you skipped step 2 and now
+see `HTTP 429 — You've exceeded the Rate Limit` in either node's log:
+
+```bash
+echo "COINGECKO_API_KEY=CG-xxxxxxxxxxxxxxxx" >> .env
+set -a; source .env; set +a
+task build-service              # rewrites service/service.json with the key
+OP=1 task register-service      # hot-reload dispatcher on op 1
+OP=2 task register-service      # hot-reload dispatcher on op 2
+```
+
+No node restart needed.
 
 **Single-operator mode.** If you don't need to demo multi-sig, set
 `OPERATORS=1` everywhere:

@@ -43,3 +43,18 @@ for op in $(seq 1 "$OPERATORS"); do
     [ "$op" -gt 1 ] && suffix="_$op"
     echo "WARPDRIVE_SIGNING_MNEMONIC${suffix}=\"$phrase\""
 done
+
+# CoinGecko Demo key (free, ~30 req/min after sign-up at
+# https://www.coingecko.com/en/api/pricing). Without it the cron-circuit
+# uses the unauthenticated public endpoint, which two operators sharing a
+# single IP will rate-limit (HTTP 429) within minutes. The build-service
+# step bakes whatever value is here into service.json; an empty value
+# falls back to the no-key path. Set COINGECKO_API_KEY before invoking
+# this script to persist your key, or edit the .env file directly later
+# and re-run `task build-service && OP=N task register-service` for each
+# operator to push it into the live dispatcher.
+if [ -n "${COINGECKO_API_KEY:-}" ]; then
+    echo "COINGECKO_API_KEY=$COINGECKO_API_KEY"
+else
+    echo "# COINGECKO_API_KEY=CG-xxxxxxxxxxxxxxxx   # demo key — uncomment to lift the public 429 cap"
+fi
