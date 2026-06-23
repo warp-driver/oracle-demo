@@ -39,6 +39,7 @@ task wire-service
 # -> service/service.json
 # -> out/service.hash
 # Each node's log: "Initializing dispatcher: services=1, workflows=3, components=4"
+# (workflows=4, components=5 once the optional Sepolia bridge below is wired up)
 
 # ----- 6. Sync both operators' pubkeys on chain + apply threshold -----
 task register-signers
@@ -82,3 +83,20 @@ task frontend-dev    # http://localhost:5173
 # Bump QUORUM/THRESHOLD to suit:
 #   QUORUM_NUM=4 QUORUM_DEN=5 task deploy-oracle  # round 2 needs 4/5 attestations
 #   THRESHOLD_NUM=4 THRESHOLD_DEN=5 task set-threshold  # round 3 verifies 4/5 sigs
+
+# ----- Triggering via MetaMask (Sepolia) -----
+# Optional second entry point: instead of Freighter calling request_twap on
+# Stellar, a MetaMask user calls TwapTrigger.request on Sepolia. Warp Drive
+# bridges the ETH event into a request_twap on the same OracleContract.
+#
+# Prereqs: Foundry installed; Sepolia ETH in your dev wallet.
+#
+# export SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+# export SEPOLIA_DEPLOYER_KEY=0x_your_funded_sepolia_secret
+# task deploy-eth-trigger        # writes out/eth-trigger.json
+# task wire-service              # uploads eth-bridge wasm + adds bridge workflow
+# task frontend-config           # exposes eth-trigger.json to the UI
+#
+# Then connect MetaMask in the UI (switches to Sepolia automatically),
+# click "Request via MetaMask (Sepolia)", sign the tx. Pipeline runs exactly
+# like the Freighter path; UI shows the same Round 2 / Final progression.

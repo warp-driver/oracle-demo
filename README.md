@@ -181,6 +181,94 @@ The UI displays the latest TWAP per asset, the running median once the
 quorum settles, and the raw round-2 attestation bundle so you can verify
 each signer's signature manually if you want.
 
+## Triggering via MetaMask (Sepolia)
+
+The demo's primary entry point is **Freighter → Stellar
+`OracleContract.request_twap`** (see the Quickstart above). The MetaMask
+path adds a second, fully equivalent entry point: a MetaMask user calls
+`TwapTrigger.request(asset, rangeSecs)` on **Sepolia**, both Warp Drive
+operators observe the `TwapRequested` event independently, each emits an
+identical `SubmissionPayload::BridgeTrigger`, the OracleContract's
+`verify_xlm` dispatcher accepts the quorum-signed envelope and emits the
+standard `twapreq` event. From there the Round 2 / Round 3 / Final
+pipeline is identical to the Freighter path — same circuits, same
+aggregator, same UI surface.
+
+The bridge is full-quorum: a single misbehaving operator cannot forge
+a request, both must independently see the same Sepolia log and produce
+byte-identical `BridgeTriggerPayload`s before the contract accepts it.
+
+### Prerequisites
+
+| Tool / asset | Why | Get it |
+|---|---|---|
+| Foundry (`forge`, `cast`) | deploys `TwapTrigger.sol` and computes the event topic hash | `curl -L https://foundry.paradigm.xyz \| bash && foundryup` |
+| Sepolia ETH (~0.01 is plenty) | gas for `task deploy-eth-trigger` plus a few user requests | free faucets, e.g. https://sepoliafaucet.com or https://www.alchemy.com/faucets/ethereum-sepolia |
+| A Sepolia RPC URL | the public endpoint bundled in `warpdrive.toml` works as-is | `https://ethereum-sepolia-rpc.publicnode.com` (no key) |
+
+### One-time setup
+
+Run these alongside the existing quickstart — typically right after
+step 4 (`task deploy`) and before step 7 (`task wire-service`).
+
+```bash
+export SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+export SEPOLIA_DEPLOYER_KEY=0x_your_funded_sepolia_secret
+
+task deploy-eth-trigger    # forge create → out/eth-trigger.json
+                           # { address, event_hash, chain_id, rpc_url }
+task wire-service          # now also uploads the eth-bridge wasm to
+                           # every operator and registers the
+                           # bridge_eth_request workflow in service.json
+task frontend-config       # copies out/eth-trigger.json into
+                           # frontend/public/ so the UI loads it
+```
+
+If you want the two Sepolia variables to live in `.env` alongside the
+other secrets, export them BEFORE re-running `./scripts/bootstrap-keys.sh
+> .env` — the bootstrap script emits them as plain `KEY=VALUE` lines
+when set, and commented placeholders when unset.
+
+### Per-request UX
+
+1. Open the UI (`task frontend-dev`, http://localhost:5173).
+2. Connect MetaMask. The frontend asks MetaMask to switch to Sepolia
+   (`chainId 0xaa36a7`) and prompts to add the network if it's missing.
+3. Pick BTC-USD or ETH-USD, set the TWAP window, and click **Request
+   via MetaMask (Sepolia)** (next to the existing **Request via
+   Freighter (Stellar)** button).
+4. MetaMask pops up with a `TwapTrigger.request(asset, rangeSecs)` tx;
+   sign + submit. Within ~12 s the Round 2 ring fills, then the median,
+   then the finalized result — identical UI to the Freighter path.
+
+The frontend filters the standard `twapreq` event stream by
+`originator == <your-MetaMask-address>` to attribute the eventual
+Round 2 / Final to your request.
+
+### Troubleshooting
+
+- **`bridge_eth_request` workflow missing from the dispatcher.** Each
+  node logs `Initializing dispatcher: services=1, workflows=N` on
+  startup or after `register-service`. With the bridge wired up `N` is
+  4; if you see `workflows=3` it means `out/eth-trigger.json` was
+  missing when `task build-service` ran (so `scripts/build-service.sh`
+  silently skipped the bridge block, by design — Stellar-only mode
+  still works). Re-run `task deploy-eth-trigger && task wire-service`.
+- **`forge create` fails with "insufficient funds".** Your
+  `SEPOLIA_DEPLOYER_KEY` address isn't funded. Get the address with
+  `cast wallet address --private-key $SEPOLIA_DEPLOYER_KEY` and drip
+  it at https://sepoliafaucet.com (or any other Sepolia faucet).
+- **MetaMask shows "Internal JSON-RPC error" on the request tx.** The
+  `TwapTrigger` contract has no admin and accepts any caller, so this
+  is almost always either a wrong network (check chainId is
+  `11155111` / `0xaa36a7`) or a stale `frontend/public/eth-trigger.json`
+  from a previous deploy. Re-run `task frontend-config`.
+- **UI never shows Round 2 fill after the Sepolia tx confirms.**
+  Check both operator logs for `evm:sepolia chain is healthy` on
+  startup — if a node failed to connect to the Sepolia WSS endpoint,
+  add a fallback in `warpdrive.toml`'s `[default.chains.evm.sepolia]
+  ws_endpoints = [...]` list and restart that node.
+
 ## What lives where
 
 ```
