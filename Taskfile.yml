@@ -140,7 +140,7 @@ tasks:
         test -n "$VERIFICATION" && test "$VERIFICATION" != "null" \
             || { echo "out/deploy.json missing .contracts.ed25519_verification — run task deploy-middleware first"; exit 1; }
         ORACLE_ADDR=$(stellar contract deploy \
-            --wasm contracts/oracle/target/wasm32v1-none/release/oracle.wasm \
+            --wasm target/wasm32v1-none/release/oracle.wasm \
             --rpc-url "{{.RPC_URL}}" \
             --network-passphrase "{{.NETWORK_PASSPHRASE}}" \
             --source "$DEPLOYER_SECRET" \
