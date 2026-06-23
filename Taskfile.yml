@@ -526,13 +526,27 @@ tasks:
         test -n "$OP_MNEMONIC" \
             || { echo "$OP_MNEMONIC_VAR is empty — re-run scripts/bootstrap-keys.sh with OPERATORS=${OP_INDEX}"; exit 1; }
         mkdir -p "$OP_DATA"
-        echo "starting op ${OP_INDEX} on http=:${OP_PORT} p2p=:${OP_P2P_PORT} data=$OP_DATA"
-        WARPDRIVE_HOME="$PWD" \
+
+        # Each operator gets its own WARPDRIVE_HOME with a warpdrive.toml
+        # whose `port` and `listen_port` are bumped by 10·(OP_INDEX-1).
+        # Op 1 uses the repo's warpdrive.toml in $PWD; op>1 gets a copy
+        # in out/op${OP_INDEX}-home/warpdrive.toml with the ports rewritten.
+        if [ "$OP_INDEX" = "1" ]; then
+            OP_HOME="$PWD"
+        else
+            OP_HOME="$PWD/out/op${OP_INDEX}-home"
+            mkdir -p "$OP_HOME"
+            sed -e "s/^port = 8000$/port = ${OP_PORT}/" \
+                -e "s/^listen_port = 9000$/listen_port = ${OP_P2P_PORT}/" \
+                warpdrive.toml > "$OP_HOME/warpdrive.toml"
+        fi
+
+        echo "starting op ${OP_INDEX} on http=:${OP_PORT} p2p=:${OP_P2P_PORT} home=$OP_HOME data=$OP_DATA"
+        WARPDRIVE_HOME="$OP_HOME" \
         WARPDRIVE_DATA="$PWD/$OP_DATA" \
-        WARPDRIVE_PORT="$OP_PORT" \
         WARPDRIVE_SIGNING_MNEMONIC="$OP_MNEMONIC" \
         WARPDRIVE_AGGREGATOR_STELLAR_CREDENTIAL="${WARPDRIVE_AGGREGATOR_STELLAR_CREDENTIAL:-$DEPLOYER_SECRET}" \
-        warpdrive --port "$OP_PORT"
+        warpdrive
 
   # ── frontend ──────────────────────────────────────────────────────────
 
