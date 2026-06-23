@@ -123,21 +123,7 @@ tasks:
       ed25519_security, ed25519_verification, project_root addresses.
     cmds:
       - mkdir -p out
-      - |
-        set -euo pipefail
-        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
-        : "${DEPLOYER_ADDRESS:?DEPLOYER_ADDRESS is required}"
-        docker run --rm \
-          --pull=always \
-          --user "$(id -u):$(id -g)" \
-          -e HOME=/tmp \
-          -e RPC_URL="{{.RPC_URL}}" \
-          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
-          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
-          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
-          -v "$PWD/out:/out" \
-          {{.MIDDLEWARE_IMAGE}} \
-          /warpdrive/cli.sh deploy --output-path /out/deploy.json --variant stellar
+      - scripts/middleware.sh deploy --output-path /out/deploy.json --variant stellar
 
   deploy-oracle:
     desc: |
@@ -319,20 +305,7 @@ tasks:
       2-of-3 quorum across multiple operators.
     cmds:
       - |
-        set -euo pipefail
-        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
-        : "${DEPLOYER_ADDRESS:?DEPLOYER_ADDRESS is required}"
-        docker run --rm \
-          --pull=always \
-          --user "$(id -u):$(id -g)" \
-          -e HOME=/tmp \
-          -e RPC_URL="{{.RPC_URL}}" \
-          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
-          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
-          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
-          -v "$PWD/out:/out" \
-          {{.MIDDLEWARE_IMAGE}} \
-          /warpdrive/cli.sh set-threshold \
+        scripts/middleware.sh set-threshold \
             --scheme ed25519 \
             --numerator {{.THRESHOLD_NUM}} \
             --denominator {{.THRESHOLD_DEN}} \
@@ -348,35 +321,13 @@ tasks:
       - test -s out/signer.pubkey || task fetch-signer
       - |
         set -euo pipefail
-        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
-        : "${DEPLOYER_ADDRESS:?DEPLOYER_ADDRESS is required}"
         SIGNER_PUBKEY=$(cat out/signer.pubkey)
-        docker run --rm \
-          --pull=always \
-          --user "$(id -u):$(id -g)" \
-          -e HOME=/tmp \
-          -e RPC_URL="{{.RPC_URL}}" \
-          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
-          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
-          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
-          -v "$PWD/out:/out" \
-          {{.MIDDLEWARE_IMAGE}} \
-          /warpdrive/cli.sh add-signer \
+        scripts/middleware.sh add-signer \
             --scheme ed25519 \
             --key "$SIGNER_PUBKEY" \
             --weight {{.SIGNER_WEIGHT}} \
             --deploy-file /out/deploy.json
-        docker run --rm \
-          --pull=always \
-          --user "$(id -u):$(id -g)" \
-          -e HOME=/tmp \
-          -e RPC_URL="{{.RPC_URL}}" \
-          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
-          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
-          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
-          -v "$PWD/out:/out" \
-          {{.MIDDLEWARE_IMAGE}} \
-          /warpdrive/cli.sh set-threshold \
+        scripts/middleware.sh set-threshold \
             --scheme ed25519 \
             --numerator {{.THRESHOLD_NUM}} \
             --denominator {{.THRESHOLD_DEN}} \
@@ -415,20 +366,8 @@ tasks:
     cmds:
       - |
         set -euo pipefail
-        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
-        : "${DEPLOYER_ADDRESS:?DEPLOYER_ADDRESS is required}"
         : "${SERVICE_URI:?SERVICE_URI is required}"
-        docker run --rm \
-          --pull=always \
-          --user "$(id -u):$(id -g)" \
-          -e HOME=/tmp \
-          -e RPC_URL="{{.RPC_URL}}" \
-          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
-          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
-          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
-          -v "$PWD/out:/out" \
-          {{.MIDDLEWARE_IMAGE}} \
-          /warpdrive/cli.sh set-project-spec-repo \
+        scripts/middleware.sh set-project-spec-repo \
             --repo "$SERVICE_URI" \
             --deploy-file /out/deploy.json
 
