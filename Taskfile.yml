@@ -198,11 +198,8 @@ tasks:
       - mkdir -p out
       - |
         . scripts/op-env.sh
-        warpdrive-cli upload-component --warpdrive-endpoint "$OP_URL" \
-            {{.CRON_WASM}} 2>&1 \
-            | tee "out/cron.upload-op${OP_INDEX}.log"
-        grep -Eo '^[a-f0-9]{64}$' "out/cron.upload-op${OP_INDEX}.log" | tail -n 1 > out/cron.digest
-        test -s out/cron.digest || { echo "no digest captured from upload-component output"; exit 1; }
+        scripts/upload-component.sh "$OP_URL" {{.CRON_WASM}} > out/cron.digest
+        echo "op ${OP_INDEX} cron digest: $(cat out/cron.digest)"
 
   upload-twap:
     desc: Upload twap-circuit wasm to operator OP (default 1); writes digest to out/twap.digest.
@@ -211,11 +208,8 @@ tasks:
       - mkdir -p out
       - |
         . scripts/op-env.sh
-        warpdrive-cli upload-component --warpdrive-endpoint "$OP_URL" \
-            {{.TWAP_WASM}} 2>&1 \
-            | tee "out/twap.upload-op${OP_INDEX}.log"
-        grep -Eo '^[a-f0-9]{64}$' "out/twap.upload-op${OP_INDEX}.log" | tail -n 1 > out/twap.digest
-        test -s out/twap.digest || { echo "no digest captured from upload-component output"; exit 1; }
+        scripts/upload-component.sh "$OP_URL" {{.TWAP_WASM}} > out/twap.digest
+        echo "op ${OP_INDEX} twap digest: $(cat out/twap.digest)"
 
   upload-median:
     desc: Upload median-circuit wasm to operator OP (default 1); writes digest to out/median.digest.
@@ -224,11 +218,8 @@ tasks:
       - mkdir -p out
       - |
         . scripts/op-env.sh
-        warpdrive-cli upload-component --warpdrive-endpoint "$OP_URL" \
-            {{.MEDIAN_WASM}} 2>&1 \
-            | tee "out/median.upload-op${OP_INDEX}.log"
-        grep -Eo '^[a-f0-9]{64}$' "out/median.upload-op${OP_INDEX}.log" | tail -n 1 > out/median.digest
-        test -s out/median.digest || { echo "no digest captured from upload-component output"; exit 1; }
+        scripts/upload-component.sh "$OP_URL" {{.MEDIAN_WASM}} > out/median.digest
+        echo "op ${OP_INDEX} median digest: $(cat out/median.digest)"
 
   upload-aggregator:
     desc: Upload oracle-aggregator wasm to operator OP (default 1); writes digest to out/aggregator.digest.
@@ -237,11 +228,8 @@ tasks:
       - mkdir -p out
       - |
         . scripts/op-env.sh
-        warpdrive-cli upload-component --warpdrive-endpoint "$OP_URL" \
-            {{.AGGREGATOR_WASM}} 2>&1 \
-            | tee "out/aggregator.upload-op${OP_INDEX}.log"
-        grep -Eo '^[a-f0-9]{64}$' "out/aggregator.upload-op${OP_INDEX}.log" | tail -n 1 > out/aggregator.digest
-        test -s out/aggregator.digest || { echo "no digest captured from upload-component output"; exit 1; }
+        scripts/upload-component.sh "$OP_URL" {{.AGGREGATOR_WASM}} > out/aggregator.digest
+        echo "op ${OP_INDEX} aggregator digest: $(cat out/aggregator.digest)"
 
   # ── service.json + node registration ──────────────────────────────────
 
