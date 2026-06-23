@@ -186,15 +186,13 @@ if [ -f out/eth-trigger.json ] && [ -f out/eth-bridge.digest ]; then
 
     # No HTTP / FS perms — the bridge circuit only decodes its trigger.
     warpdrive-cli service -f "$SERVICE_FILE" workflow submit \
-        --id bridge_eth_request set-stellar \
-        --chain "$TRIGGER_CHAIN" \
-        --contract-id "$ORACLE"
+        --id bridge_eth_request set-aggregator
 
-    warpdrive-cli service -f "$SERVICE_FILE" workflow aggregator \
-        --id bridge_eth_request set-source-digest --digest "$AGG_DIGEST"
+    warpdrive-cli service -f "$SERVICE_FILE" workflow submit \
+        --id bridge_eth_request component set-source-digest --digest "$AGG_DIGEST"
 
-    warpdrive-cli service -f "$SERVICE_FILE" workflow aggregator \
-        --id bridge_eth_request config \
+    warpdrive-cli service -f "$SERVICE_FILE" workflow submit \
+        --id bridge_eth_request component config \
         --values "chain=$TRIGGER_CHAIN" \
         --values "service_handler=$ORACLE"
 fi
