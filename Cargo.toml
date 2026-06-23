@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+# Only the Soroban contract crates live in the workspace. The WASI
+# circuits + aggregator under `components/` build with `cargo-component`
+# against a different target triple (`wasm32-wasip1`) and have their own
+# per-crate Cargo.lock, so they are excluded from the workspace.
+members = [
+    "contracts/ed25519-security",
+    "contracts/ed25519-verification",
+    "contracts/oracle",
+]
+exclude = [
+    "components",
+    "frontend",
+    "wit-definitions",
+]
+
+# Inherited by every Soroban contract crate. Picked to mirror the
+# warpdrive-contracts release profile — the `wasm32v1-none` target is
+# resolved per-crate via `cargo build --target wasm32v1-none --release`.
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
