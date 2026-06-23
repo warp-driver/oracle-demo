@@ -302,21 +302,25 @@ tasks:
       Update the consensus threshold on the ed25519-security contract.
       Defaults to {{.THRESHOLD_NUM}}/{{.THRESHOLD_DEN}}; override with env
       vars, e.g. `THRESHOLD_NUM=2 THRESHOLD_DEN=3 task set-threshold` for
-      2-of-3 quorum across multiple operators.
+      2-of-3 quorum across multiple operators. Routed through
+      project_root because `task deploy-middleware` hands the security
+      contract's admin off to project_root during pipeline deploy.
     cmds:
       - |
         scripts/middleware.sh set-threshold \
             --scheme ed25519 \
             --numerator {{.THRESHOLD_NUM}} \
             --denominator {{.THRESHOLD_DEN}} \
-            --deploy-file /out/deploy.json
+            --deploy-file /out/deploy.json \
+            --via-project-root
 
   register-signer:
     desc: |
       Register the operator's ed25519 pubkey on the on-chain security
       contract and set the consensus threshold. Auto-fetches the pubkey
       from the running node (`fetch-signer`) unless out/signer.pubkey
-      already exists.
+      already exists. Routes through project_root for the same reason
+      `task set-threshold` does.
     cmds:
       - test -s out/signer.pubkey || task fetch-signer
       - |
@@ -326,12 +330,14 @@ tasks:
             --scheme ed25519 \
             --key "$SIGNER_PUBKEY" \
             --weight {{.SIGNER_WEIGHT}} \
-            --deploy-file /out/deploy.json
+            --deploy-file /out/deploy.json \
+            --via-project-root
         scripts/middleware.sh set-threshold \
             --scheme ed25519 \
             --numerator {{.THRESHOLD_NUM}} \
             --denominator {{.THRESHOLD_DEN}} \
-            --deploy-file /out/deploy.json
+            --deploy-file /out/deploy.json \
+            --via-project-root
 
   # ── multi-operator IPFS publishing (optional) ─────────────────────────
 

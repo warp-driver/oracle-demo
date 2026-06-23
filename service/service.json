@@ -1,0 +1,151 @@
+{
+  "name": "oracle-demo",
+  "workflows": {
+    "compute_median": {
+      "trigger": {
+        "stellar_contract_event": {
+          "chain": "stellar:testnet",
+          "contract_id": "CAYHLR46IEWUAO2GU5DOAYNVTE4AFVYABYAH2D5BQXSB2JUXLKFN26OE",
+          "topic_segments": [
+            {
+              "exact": {
+                "symbol": "r2ready"
+              }
+            },
+            "wildcard"
+          ]
+        }
+      },
+      "component": {
+        "source": {
+          "digest": "958faa20f0c45f78e0ab533dbea840482d41f98e94cf198cd8164b42a4d6f49b"
+        },
+        "permissions": {
+          "allowed_http_hosts": "none",
+          "file_system": false,
+          "raw_sockets": false,
+          "dns_resolution": false
+        },
+        "fuel_limit": null,
+        "time_limit_seconds": null,
+        "config": {},
+        "env_keys": []
+      },
+      "submit": {
+        "aggregator": {
+          "component": {
+            "source": {
+              "digest": "8ee77ea28f9834d579f51c43a58c4719297139b2ec7dd7a930def064d0832775"
+            },
+            "permissions": {
+              "allowed_http_hosts": "none",
+              "file_system": false,
+              "raw_sockets": false,
+              "dns_resolution": false
+            },
+            "fuel_limit": null,
+            "time_limit_seconds": null,
+            "config": {
+              "chain": "stellar:testnet",
+              "service_handler": "CAYHLR46IEWUAO2GU5DOAYNVTE4AFVYABYAH2D5BQXSB2JUXLKFN26OE"
+            },
+            "env_keys": []
+          }
+        }
+      }
+    },
+    "compute_twap": {
+      "trigger": {
+        "stellar_contract_event": {
+          "chain": "stellar:testnet",
+          "contract_id": "CAYHLR46IEWUAO2GU5DOAYNVTE4AFVYABYAH2D5BQXSB2JUXLKFN26OE",
+          "topic_segments": [
+            {
+              "exact": {
+                "symbol": "twapreq"
+              }
+            },
+            "wildcard"
+          ]
+        }
+      },
+      "component": {
+        "source": {
+          "digest": "2e01c749bfd420679ca4b8e105586f7e8a0a2a7bb7a9f3ee1b296d42a9674127"
+        },
+        "permissions": {
+          "allowed_http_hosts": "none",
+          "file_system": false,
+          "raw_sockets": false,
+          "dns_resolution": false
+        },
+        "fuel_limit": null,
+        "time_limit_seconds": null,
+        "config": {},
+        "env_keys": []
+      },
+      "submit": {
+        "aggregator": {
+          "component": {
+            "source": {
+              "digest": "8ee77ea28f9834d579f51c43a58c4719297139b2ec7dd7a930def064d0832775"
+            },
+            "permissions": {
+              "allowed_http_hosts": "none",
+              "file_system": false,
+              "raw_sockets": false,
+              "dns_resolution": false
+            },
+            "fuel_limit": null,
+            "time_limit_seconds": null,
+            "config": {
+              "chain": "stellar:testnet",
+              "service_handler": "CAYHLR46IEWUAO2GU5DOAYNVTE4AFVYABYAH2D5BQXSB2JUXLKFN26OE"
+            },
+            "env_keys": []
+          }
+        }
+      }
+    },
+    "fetch_prices": {
+      "trigger": {
+        "cron": {
+          "schedule": "0 */10 * * * *",
+          "start_time": null,
+          "end_time": null
+        }
+      },
+      "component": {
+        "source": {
+          "digest": "b4da157e31194979d2936fc32af26b91614b5b1bb5d94c6c4a6de312f1308604"
+        },
+        "permissions": {
+          "allowed_http_hosts": {
+            "only": [
+              "api.coingecko.com"
+            ]
+          },
+          "file_system": false,
+          "raw_sockets": false,
+          "dns_resolution": false
+        },
+        "fuel_limit": null,
+        "time_limit_seconds": null,
+        "config": {},
+        "env_keys": []
+      },
+      "submit": "none"
+    }
+  },
+  "status": "active",
+  "manager": {
+    "stellar": {
+      "chain": "stellar:testnet",
+      "address": "CCS76IZNINQRO2OO2HR2HJRGRIBT6VQB4EYKNSEUIMHMEEF67TD7ZXG4"
+    }
+  },
+  "signature_kind": {
+    "algorithm": "ed25519",
+    "prefix": "sep53"
+  }
+}
