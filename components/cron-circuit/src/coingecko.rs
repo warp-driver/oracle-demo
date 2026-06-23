@@ -45,7 +45,11 @@ pub fn fetch_now() -> Result<Vec<(&'static str, u64, i128)>> {
 /// return the raw body. Surfaces non-2xx status codes with the body
 /// embedded so the caller can decide whether to retry / log / bail.
 async fn fetch(url: &str, api_key: Option<&str>) -> Result<Vec<u8>> {
-    let mut builder = Request::get(url);
+    let mut builder = Request::get(url)
+        // CoinGecko's edge rejects requests with no UA (HTTP 403 with
+        // the message 'Please add a descriptive User-Agent…').
+        .header("user-agent", "warpdrive-oracle-demo/0.1 (+https://wa.dev/warpdrive)")
+        .header("accept", "application/json");
     if let Some(key) = api_key {
         builder = builder.header("x-cg-demo-api-key", key);
     }
