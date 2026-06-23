@@ -70,46 +70,79 @@ config differs.
 | `warpdrive-cli` + `warpdrive` daemon | upload components, run the node | from `../warpdrive`: `cargo install --path packages/cli --locked && cargo install --path packages/warpdrive --locked` |
 | `jq` | the Taskfile mangles JSON in a few places | `apt install jq` / `brew install jq` |
 
-## Quickstart (single-operator, testnet)
+## Quickstart (2 operators on one host, testnet)
 
-A funded testnet key, one warpdrive node, one signer. About 5 minutes
-from clone to UI:
+A funded testnet key plus two warpdrive nodes on the same machine. The
+two nodes each fetch CoinGecko independently, sign their own Round 2
+attestations, then quorum-sign the Round 3 median together. You'll
+see two distinct signers light up the bundle on the UI. About 5
+minutes from clone to first finalized TWAP.
 
 ```bash
-# 1. WIT deps (one-time)
+# 1. WIT deps (one-time per clone).
 task fetch-wit
 
-# 2. Generate keys + write .env
+# 2. Generate the funded deployer + two operator mnemonics, write .env.
 ./scripts/bootstrap-keys.sh > .env
 set -a; source .env; set +a
 
-# 3. Phase 1: build everything + deploy on-chain contracts
+# 3. Phase 1 — build contracts + components, deploy on-chain stack.
 task deploy
-# -> out/deploy.json, out/oracle.json
+# -> out/deploy.json (ed25519_security + ed25519_verification + project_root)
+# -> out/oracle.json (the handler — QUORUM defaults to 1/1 = "all operators")
 
-# 4. Start the warpdrive node (leave running in another terminal)
-#    cd <repo>; set -a; source .env; set +a
-#    task run-node
-# Wait for "Stellar chain [stellar:testnet] is healthy".
+# 4. Start operator 1 — leave running in a SECOND terminal.
+#       cd <repo>
+#       set -a; source .env; set +a
+#       task run-node
+#    Wait for "Stellar chain [stellar:testnet] is healthy" and
+#    "HTTP server bound to port 8000".
 
-# 5. Phase 2: upload components, build + register service.json
+# 5. Start operator 2 — leave running in a THIRD terminal.
+#       cd <repo>
+#       set -a; source .env; set +a
+#       OP=2 task run-node
+#    HTTP port 8010, p2p port 9010, data dir out/node-data-2,
+#    signing key from WARPDRIVE_SIGNING_MNEMONIC_2.
+
+# 6. Phase 2 — upload components to BOTH nodes, build service.json,
+#    activate it on both dispatchers. `wire-service` walks OPERATORS.
 task wire-service
 
-# 6. Register the operator's pubkey + set 1/1 threshold
-task register-signer
+# 7. Register both operators' pubkeys on chain + apply threshold.
+task register-signers
+# Default: weight 100 each, threshold 1/1 ("100 % of total weight"),
+# so a single signature is insufficient and both nodes must agree.
 
-# 7. Hand the oracle contract id to the frontend
+# 8. Hand the oracle contract id to the frontend, then run the UI.
 task frontend-config
-
-# 8. Run the UI (opens http://localhost:5173)
-task frontend-dev
+task frontend-dev    # http://localhost:5173
 ```
 
-Every step uses the same `DEPLOYER_SECRET` + `WARPDRIVE_SIGNING_MNEMONIC`
-that `bootstrap-keys.sh` wrote into `.env`. If a task complains about a
-missing env var, you forgot the `set -a; source .env; set +a` in that
-shell.
+Hit the UI, connect Freighter (testnet), submit a BTC-USD TWAP
+request. Round 2 fills to 2/2 in ~10 s, the contract emits
+`Round2Ready`, both median circuits agree, the aggregator collects
+two signatures of weight 100 each into one envelope, and `Finalized`
+lands in the next ledger close.
 
+**Single-operator mode.** If you don't need to demo multi-sig, set
+`OPERATORS=1` everywhere:
+
+```bash
+OPERATORS=1 ./scripts/bootstrap-keys.sh > .env
+set -a; source .env; set +a
+# task deploy → start one terminal with `task run-node` →
+OPERATORS=1 task wire-service
+OPERATORS=1 task register-signers
+task frontend-config && task frontend-dev
+```
+
+Threshold 1/1 with one signer still requires that signer, so the
+round-2 ring fills to 1/1 and the final settles after a single
+attestation.
+
+If any task complains about a missing env var, you forgot
+`set -a; source .env; set +a` in that shell.
 ## Connecting wallets
 
 The frontend talks to two wallets:

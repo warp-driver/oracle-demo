@@ -5,7 +5,7 @@
       "trigger": {
         "stellar_contract_event": {
           "chain": "stellar:testnet",
-          "contract_id": "CBJGQ4NXQYGQ2AJHIJ6U4BHVZKIPVAIQVRDFKSTXIZ5UI6R4U4QNYXUR",
+          "contract_id": "CCAHDNNFL7H2YGMGGPUV6OHGF3YNXNMRRFPUZJZTEV3LKOBIRGB3U2KQ",
           "topic_segments": [
             {
               "exact": {
@@ -47,7 +47,7 @@
             "time_limit_seconds": null,
             "config": {
               "chain": "stellar:testnet",
-              "service_handler": "CBJGQ4NXQYGQ2AJHIJ6U4BHVZKIPVAIQVRDFKSTXIZ5UI6R4U4QNYXUR"
+              "service_handler": "CCAHDNNFL7H2YGMGGPUV6OHGF3YNXNMRRFPUZJZTEV3LKOBIRGB3U2KQ"
             },
             "env_keys": []
           }
@@ -58,7 +58,7 @@
       "trigger": {
         "stellar_contract_event": {
           "chain": "stellar:testnet",
-          "contract_id": "CBJGQ4NXQYGQ2AJHIJ6U4BHVZKIPVAIQVRDFKSTXIZ5UI6R4U4QNYXUR",
+          "contract_id": "CCAHDNNFL7H2YGMGGPUV6OHGF3YNXNMRRFPUZJZTEV3LKOBIRGB3U2KQ",
           "topic_segments": [
             {
               "exact": {
@@ -100,7 +100,7 @@
             "time_limit_seconds": null,
             "config": {
               "chain": "stellar:testnet",
-              "service_handler": "CBJGQ4NXQYGQ2AJHIJ6U4BHVZKIPVAIQVRDFKSTXIZ5UI6R4U4QNYXUR"
+              "service_handler": "CCAHDNNFL7H2YGMGGPUV6OHGF3YNXNMRRFPUZJZTEV3LKOBIRGB3U2KQ"
             },
             "env_keys": []
           }

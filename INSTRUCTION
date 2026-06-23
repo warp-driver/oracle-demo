@@ -11,46 +11,52 @@ cd /home/u/work/warpdrive/oracle-demo
 # WIT deps (one-time per clone)
 task fetch-wit
 
-# ----- 1. Mint demo identities + write .env -----
+# ----- 1. Mint deployer + 2 operator mnemonics, write .env -----
 ./scripts/bootstrap-keys.sh > .env
 set -a; source .env; set +a
 
-# ----- 2. Phase 1: build everything + deploy on-chain contracts -----
+# ----- 2. Phase 1: build contracts + components, deploy on-chain stack -----
 task deploy
-# -> out/deploy.json    (ed25519_security, ed25519_verification, project_root)
-# -> out/oracle.json    (the handler contract, default quorum 4/5)
-# Also runs register_handler on project_root.
+# -> out/deploy.json   (ed25519_security, ed25519_verification, project_root)
+# -> out/oracle.json   (the handler — quorum defaults to 1/1 = "all operators")
 
-# ----- 3. Start the warpdrive node in another terminal -----
+# ----- 3. SECOND TERMINAL — operator 1 (port 8000) -----
 #   cd /home/u/work/warpdrive/oracle-demo
 #   set -a; source .env; set +a
 #   task run-node
-# Wait for "Stellar chain [stellar:testnet] is healthy". Leave it running.
+# Wait for "Stellar chain [stellar:testnet] is healthy"
+# and "HTTP server bound to port 8000". Leave running.
 
-# ----- 4. Phase 2: upload components, build service.json, register with node -----
+# ----- 4. THIRD TERMINAL — operator 2 (port 8010) -----
+#   cd /home/u/work/warpdrive/oracle-demo
+#   set -a; source .env; set +a
+#   OP=2 task run-node
+# HTTP :8010, p2p :9010, data dir out/node-data-2.
+
+# ----- 5. Phase 2: upload to BOTH nodes + build/activate service -----
 task wire-service
 # -> out/{cron,twap,median,aggregator}.digest
 # -> service/service.json
 # -> out/service.hash
-# Node log: "Initializing dispatcher: services=1, workflows=3, components=4"
+# Each node's log: "Initializing dispatcher: services=1, workflows=3, components=4"
 
-# ----- 5. Register the operator's pubkey + threshold (default 1/1) -----
-task register-signer
-# Drops stale signers from previous service-registration cycles, fetches
-# the current node's pubkey, adds it at weight SIGNER_WEIGHT (default 100),
-# sets THRESHOLD_NUM/THRESHOLD_DEN (default 1/1).
+# ----- 6. Sync both operators' pubkeys on chain + apply threshold -----
+task register-signers
+# Walks OP=1..OPERATORS, drops anything not in the resulting set,
+# adds the rest at SIGNER_WEIGHT=100, sets threshold 1/1 (=all-weight).
 
-# ----- 6. Hand the oracle contract id to the frontend, then run the UI -----
+# ----- 7. Frontend config + UI -----
 task frontend-config
 task frontend-dev    # http://localhost:5173
 
-# Done. The node is now:
-# - polling CoinGecko every 30s (fetch_prices workflow; CRON_SCHEDULE override)
-# - watching OracleContract for "twapreq" events (compute_twap workflow)
-# - watching OracleContract for "r2ready" events (compute_median workflow)
+# Done. Both nodes are now:
+# - polling CoinGecko every 30 s (fetch_prices; CRON_SCHEDULE override)
+# - watching OracleContract for "twapreq" events (compute_twap)
+# - watching OracleContract for "r2ready" events (compute_median)
 #
-# Use the UI to call request_twap(asset, range_secs); within ~10–20 s
-# you should see Round2Ready, then Finalized.
+# Submit a TWAP request from the UI; within ~10–20 s the Round 2 bundle
+# fills to 2/2, Round2Ready fires, then Finalized lands with the
+# quorum-signed median.
 
 # ----- Verify final TWAP for a request id manually -----
 # REQUEST_ID=0
@@ -61,10 +67,18 @@ task frontend-dev    # http://localhost:5173
 #   --source "$DEPLOYER_SECRET" \
 #   -- final_twap --request_id "$REQUEST_ID"
 
-# ----- Multi-operator (see README → "Multi-operator deployment") -----
-# Two recipes: same-host N nodes for screenshots, multi-host for prod.
-# Key invariant: deploy QUORUM_NUM/QUORUM_DEN on the oracle AND
-# THRESHOLD_NUM/THRESHOLD_DEN on the security contract together.
-# E.g. 5 operators at 4-of-5:
-#   QUORUM_NUM=4 QUORUM_DEN=5 task deploy-oracle
-#   THRESHOLD_NUM=4 THRESHOLD_DEN=5 task set-threshold
+# ----- Single-operator mode (skip terminal 3) -----
+# OPERATORS=1 ./scripts/bootstrap-keys.sh > .env
+# set -a; source .env; set +a
+# task deploy && task run-node    # one node, port 8000
+# OPERATORS=1 task wire-service
+# OPERATORS=1 task register-signers
+# task frontend-config && task frontend-dev
+
+# ----- N>2 operators (same host, ports 8000/8010/8020/...) -----
+# OPERATORS=5 ./scripts/bootstrap-keys.sh > .env
+# task deploy + N terminals running `OP=K task run-node` for K=1..5,
+# then OPERATORS=5 task wire-service && OPERATORS=5 task register-signers.
+# Bump QUORUM/THRESHOLD to suit:
+#   QUORUM_NUM=4 QUORUM_DEN=5 task deploy-oracle  # round 2 needs 4/5 attestations
+#   THRESHOLD_NUM=4 THRESHOLD_DEN=5 task set-threshold  # round 3 verifies 4/5 sigs

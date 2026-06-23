@@ -49,8 +49,8 @@ vars:
   NETWORK_PASSPHRASE: '{{.NETWORK_PASSPHRASE | default "Test SDF Network ; September 2015"}}'
   TRIGGER_CHAIN: '{{.TRIGGER_CHAIN | default "stellar:testnet"}}'
   MANAGER_CHAIN: '{{.MANAGER_CHAIN | default "stellar:testnet"}}'
-  QUORUM_NUM: '{{.QUORUM_NUM | default "4"}}'
-  QUORUM_DEN: '{{.QUORUM_DEN | default "5"}}'
+  QUORUM_NUM: '{{.QUORUM_NUM | default "1"}}'
+  QUORUM_DEN: '{{.QUORUM_DEN | default "1"}}'
   SIGNER_WEIGHT: '{{.SIGNER_WEIGHT | default "100"}}'
   THRESHOLD_NUM: '{{.THRESHOLD_NUM | default "1"}}'
   THRESHOLD_DEN: '{{.THRESHOLD_DEN | default "1"}}'
@@ -64,6 +64,15 @@ vars:
   # to "0 */10 * * * *" (the spec's every-10-minutes cadence) before
   # `task wire-service` for production.
   CRON_SCHEDULE: '{{.CRON_SCHEDULE | default "*/30 * * * * *"}}'
+  # Number of operators in the demo. The default quickstart runs 2 on
+  # the same host (one extra terminal). Each operator N runs its own
+  # warpdrive node on port (8000 + 10*(N-1)) and signs with mnemonic
+  # WARPDRIVE_SIGNING_MNEMONIC (N=1) or WARPDRIVE_SIGNING_MNEMONIC_N
+  # (N>1). Tasks that act on "the node" (run-node, upload-*,
+  # register-service, fetch-signer) read the OP env var (default 1)
+  # to pick which operator they target. register-signers (plural)
+  # walks 1..OPERATORS in one shot.
+  OPERATORS: '{{.OPERATORS | default "2"}}'
 
 tasks:
   fetch-wit:
@@ -183,43 +192,55 @@ tasks:
   # ── component uploads ─────────────────────────────────────────────────
 
   upload-cron:
-    desc: Upload cron-circuit wasm; writes digest to out/cron.digest.
+    desc: Upload cron-circuit wasm to operator OP (default 1); writes digest to out/cron.digest.
     deps: [build-cron-circuit]
     cmds:
       - mkdir -p out
-      - warpdrive-cli upload-component {{.CRON_WASM}} 2>&1 | tee out/cron.upload.log
       - |
-        grep -Eo '^[a-f0-9]{64}$' out/cron.upload.log | tail -n 1 > out/cron.digest
+        . scripts/op-env.sh
+        warpdrive-cli upload-component --warpdrive-endpoint "$OP_URL" \
+            {{.CRON_WASM}} 2>&1 \
+            | tee "out/cron.upload-op${OP_INDEX}.log"
+        grep -Eo '^[a-f0-9]{64}$' "out/cron.upload-op${OP_INDEX}.log" | tail -n 1 > out/cron.digest
         test -s out/cron.digest || { echo "no digest captured from upload-component output"; exit 1; }
 
   upload-twap:
-    desc: Upload twap-circuit wasm; writes digest to out/twap.digest.
+    desc: Upload twap-circuit wasm to operator OP (default 1); writes digest to out/twap.digest.
     deps: [build-twap-circuit]
     cmds:
       - mkdir -p out
-      - warpdrive-cli upload-component {{.TWAP_WASM}} 2>&1 | tee out/twap.upload.log
       - |
-        grep -Eo '^[a-f0-9]{64}$' out/twap.upload.log | tail -n 1 > out/twap.digest
+        . scripts/op-env.sh
+        warpdrive-cli upload-component --warpdrive-endpoint "$OP_URL" \
+            {{.TWAP_WASM}} 2>&1 \
+            | tee "out/twap.upload-op${OP_INDEX}.log"
+        grep -Eo '^[a-f0-9]{64}$' "out/twap.upload-op${OP_INDEX}.log" | tail -n 1 > out/twap.digest
         test -s out/twap.digest || { echo "no digest captured from upload-component output"; exit 1; }
 
   upload-median:
-    desc: Upload median-circuit wasm; writes digest to out/median.digest.
+    desc: Upload median-circuit wasm to operator OP (default 1); writes digest to out/median.digest.
     deps: [build-median-circuit]
     cmds:
       - mkdir -p out
-      - warpdrive-cli upload-component {{.MEDIAN_WASM}} 2>&1 | tee out/median.upload.log
       - |
-        grep -Eo '^[a-f0-9]{64}$' out/median.upload.log | tail -n 1 > out/median.digest
+        . scripts/op-env.sh
+        warpdrive-cli upload-component --warpdrive-endpoint "$OP_URL" \
+            {{.MEDIAN_WASM}} 2>&1 \
+            | tee "out/median.upload-op${OP_INDEX}.log"
+        grep -Eo '^[a-f0-9]{64}$' "out/median.upload-op${OP_INDEX}.log" | tail -n 1 > out/median.digest
         test -s out/median.digest || { echo "no digest captured from upload-component output"; exit 1; }
 
   upload-aggregator:
-    desc: Upload oracle-aggregator wasm; writes digest to out/aggregator.digest.
+    desc: Upload oracle-aggregator wasm to operator OP (default 1); writes digest to out/aggregator.digest.
     deps: [build-aggregator]
     cmds:
       - mkdir -p out
-      - warpdrive-cli upload-component {{.AGGREGATOR_WASM}} 2>&1 | tee out/aggregator.upload.log
       - |
-        grep -Eo '^[a-f0-9]{64}$' out/aggregator.upload.log | tail -n 1 > out/aggregator.digest
+        . scripts/op-env.sh
+        warpdrive-cli upload-component --warpdrive-endpoint "$OP_URL" \
+            {{.AGGREGATOR_WASM}} 2>&1 \
+            | tee "out/aggregator.upload-op${OP_INDEX}.log"
+        grep -Eo '^[a-f0-9]{64}$' "out/aggregator.upload-op${OP_INDEX}.log" | tail -n 1 > out/aggregator.digest
         test -s out/aggregator.digest || { echo "no digest captured from upload-component output"; exit 1; }
 
   # ── service.json + node registration ──────────────────────────────────
@@ -243,49 +264,54 @@ tasks:
 
   register-service:
     desc: |
-      Register service/service.json with the local warpdrive node via
-      /dev/services. Saves the service hash to out/service.hash and
-      activates the service in the dispatcher.
+      Register service/service.json with operator OP's warpdrive node
+      via /dev/services. Saves the service hash to out/service.hash and
+      activates the service in that node's dispatcher.
+
+      Default quickstart runs this for OP=1 and then OP=2 — each node
+      keeps its own dispatcher state, so each gets the service activated
+      independently. The service hash is content-addressed (matches across
+      operators) so out/service.hash is identical either way.
 
       Idempotent: if the dispatcher already has a service registered
-      under the same project_root manager (typical after a
-      `wire-service` re-run when component digests have changed), the
-      old registration is deleted via `DELETE /services` and the new
-      one is activated in its place.
+      under the same project_root manager, the old registration is
+      deleted via `DELETE /services` and the new one is activated in
+      its place.
     cmds:
       - mkdir -p out
       - |
         set -euo pipefail
-        HASH=$(curl -sS -X POST http://127.0.0.1:8000/dev/services \
+        . scripts/op-env.sh
+        HASH=$(curl -sS -X POST "$OP_URL/dev/services" \
             -H "Content-Type: application/json" \
             --data @{{.SERVICE_FILE}} | jq -r .hash)
         test -n "$HASH" && test "$HASH" != "null" \
-            || { echo "no hash returned from /dev/services"; exit 1; }
+            || { echo "no hash returned from $OP_URL/dev/services"; exit 1; }
         echo "$HASH" > out/service.hash
-        echo "service hash: $HASH"
+        echo "service hash (op ${OP_INDEX}): $HASH"
 
         activate() {
             curl -sS -o /tmp/oracle-activate.body -w '%{http_code}' \
-                -X POST "http://127.0.0.1:8000/dev/services/$HASH"
+                -X POST "$OP_URL/dev/services/$HASH"
         }
         STATUS=$(activate)
         if [ "$STATUS" = "200" ] || [ "$STATUS" = "204" ]; then
-            echo "service registered with dispatcher"
+            echo "service registered with op ${OP_INDEX} dispatcher"
             exit 0
         fi
         BODY=$(cat /tmp/oracle-activate.body 2>/dev/null || true)
         case "$BODY" in
             *"already registered"*)
-                echo "service manager already registered — deleting old registration"
+                echo "op ${OP_INDEX}: service manager already registered — deleting old registration"
                 MANAGER=$(jq -c '.manager' {{.SERVICE_FILE}})
                 jq -nc --argjson m "$MANAGER" '{service_managers: [$m]}' \
-                    | curl -sSf -X DELETE http://127.0.0.1:8000/services \
+                    | curl -sSf -X DELETE "$OP_URL/services" \
                         -H "Content-Type: application/json" \
                         --data-binary @-
                 STATUS=$(activate)
                 test "$STATUS" = "200" -o "$STATUS" = "204" \
                     || { echo "re-activation failed: HTTP $STATUS"; cat /tmp/oracle-activate.body; exit 1; }
-                echo "service re-registered with dispatcher"
+                echo "service re-registered with op ${OP_INDEX} dispatcher"
                 ;;
             *)
                 echo "activation failed: HTTP $STATUS"
@@ -318,23 +344,26 @@ tasks:
 
   fetch-signer:
     desc: |
-      Ask the running warpdrive node for the operator's ed25519 pubkey for
-      this service (the service must already be registered via
+      Ask operator OP's warpdrive node for its ed25519 pubkey for the
+      current service (the service must already be registered via
       `task register-service`). Writes the full SignerResponse to
-      out/signer.json and the 32-byte ed25519 pubkey to out/signer.pubkey.
+      out/signer-op${OP}.json and the 32-byte pubkey to
+      out/signer-op${OP}.pubkey.
     cmds:
       - mkdir -p out
       - |
         set -euo pipefail
+        . scripts/op-env.sh
         PROJECT_ROOT=$(jq -r .contracts.project_root out/deploy.json)
         BODY=$(jq -nc --arg chain "{{.MANAGER_CHAIN}}" --arg addr "$PROJECT_ROOT" \
             '{service_manager: {stellar: {chain: $chain, address: $addr}}}')
-        curl -sSf -X POST http://127.0.0.1:8000/services/signer \
+        curl -sSf -X POST "$OP_URL/services/signer" \
             -H "Content-Type: application/json" \
-            --data "$BODY" > out/signer.json
-        jq -r .ed25519.ed25519_pubkey out/signer.json > out/signer.pubkey
-        test -s out/signer.pubkey || { echo "no pubkey in signer response"; cat out/signer.json; exit 1; }
-        echo "operator pubkey: $(cat out/signer.pubkey)"
+            --data "$BODY" > "out/signer-op${OP_INDEX}.json"
+        jq -r .ed25519.ed25519_pubkey "out/signer-op${OP_INDEX}.json" > "out/signer-op${OP_INDEX}.pubkey"
+        test -s "out/signer-op${OP_INDEX}.pubkey" \
+            || { echo "no pubkey in signer response"; cat "out/signer-op${OP_INDEX}.json"; exit 1; }
+        echo "op ${OP_INDEX} pubkey: $(cat out/signer-op${OP_INDEX}.pubkey)"
 
   set-threshold:
     desc: |
@@ -353,36 +382,46 @@ tasks:
             --deploy-file /out/deploy.json \
             --via-project-root
 
-  register-signer:
+  register-signers:
     desc: |
-      Register the operator's ed25519 pubkey on the on-chain security
-      contract and set the consensus threshold. Always refetches the
-      pubkey from the running node — the warpdrive node derives a fresh
-      signing key each time the service registration changes, so a
-      stale out/signer.pubkey would silently leave the on-chain set
-      pointing at a key the node no longer uses. Before adding the
-      current key we drop any previously-registered key that isn't it;
-      otherwise stale keys accumulate (each service-registration cycle
-      rotates the signer) and inflate total_weight past what one
-      signature can cover, so try_verify rejects with #303
-      InsufficientWeight even though the only live operator did sign.
-      Routes through project_root for the same reason
-      `task set-threshold` does.
+      Sync the ed25519-security signer set to exactly the running
+      OPERATORS' ed25519 pubkeys (default 2), then set the threshold.
+
+      Walks OP=1..{{.OPERATORS}} and asks each node for its pubkey.
+      Removes any signer currently registered on chain that isn't one
+      of those, then adds any missing ones at SIGNER_WEIGHT (default
+      100), then applies THRESHOLD_NUM/THRESHOLD_DEN (default 1/1 =
+      "require 100 % of total weight").
+
+      Idempotent — a re-run after `wire-service` (which rotates signing
+      keys) cleanly resets the set without manual fix-up.
     cmds:
-      - task: fetch-signer
       - |
         set -euo pipefail
-        SIGNER_PUBKEY=$(cat out/signer.pubkey)
+        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
         SECURITY=$(jq -r .contracts.ed25519_security out/deploy.json)
-        # Drop every signer currently on the security contract that
-        # isn't the one the node will sign with going forward.
-        for STALE in $(stellar contract invoke \
+
+        # 1. Fetch each running node's current pubkey.
+        DESIRED=""
+        for i in $(seq 1 {{.OPERATORS}}); do
+            OP=$i task fetch-signer
+            P=$(cat "out/signer-op${i}.pubkey")
+            DESIRED="${DESIRED}${P}\n"
+        done
+        DESIRED=$(printf "$DESIRED" | sort -u)
+        echo "desired signer set:"
+        echo "$DESIRED" | sed 's/^/  /'
+
+        # 2. Drop any on-chain signer that isn't desired.
+        CURRENT=$(stellar contract invoke \
                 --id "$SECURITY" \
                 --rpc-url "{{.RPC_URL}}" \
                 --network-passphrase "{{.NETWORK_PASSPHRASE}}" \
                 --source "$DEPLOYER_SECRET" \
                 -- list_signers \
-            | jq -r --arg cur "$SIGNER_PUBKEY" '.[] | select(.key != $cur) | .key'); do
+            | jq -r '.[].key' | sort -u)
+        for STALE in $(comm -23 <(echo "$CURRENT") <(echo "$DESIRED")); do
+            test -z "$STALE" && continue
             echo "removing stale signer $STALE"
             scripts/middleware.sh remove-signer \
                 --scheme ed25519 \
@@ -390,18 +429,27 @@ tasks:
                 --deploy-file /out/deploy.json \
                 --via-project-root
         done
-        scripts/middleware.sh add-signer \
-            --scheme ed25519 \
-            --key "$SIGNER_PUBKEY" \
-            --weight {{.SIGNER_WEIGHT}} \
-            --deploy-file /out/deploy.json \
-            --via-project-root
+
+        # 3. Add any missing desired signer at SIGNER_WEIGHT.
+        for NEW in $(comm -23 <(echo "$DESIRED") <(echo "$CURRENT")); do
+            test -z "$NEW" && continue
+            echo "adding signer $NEW (weight {{.SIGNER_WEIGHT}})"
+            scripts/middleware.sh add-signer \
+                --scheme ed25519 \
+                --key "$NEW" \
+                --weight {{.SIGNER_WEIGHT}} \
+                --deploy-file /out/deploy.json \
+                --via-project-root
+        done
+
+        # 4. Apply threshold.
         scripts/middleware.sh set-threshold \
             --scheme ed25519 \
             --numerator {{.THRESHOLD_NUM}} \
             --denominator {{.THRESHOLD_DEN}} \
             --deploy-file /out/deploy.json \
             --via-project-root
+        echo "security set synced — {{.OPERATORS}} signer(s), threshold {{.THRESHOLD_NUM}}/{{.THRESHOLD_DEN}}"
 
   # ── multi-operator IPFS publishing (optional) ─────────────────────────
 
@@ -460,21 +508,31 @@ tasks:
 
   run-node:
     desc: |
-      Run a single-operator warpdrive node locally using the warpdrive.toml
-      in this repo. Requires WARPDRIVE_SIGNING_MNEMONIC (BIP39 — see
-      Taskfile header for how to generate) and DEPLOYER_SECRET (the
-      testnet S-seed, reused as the Stellar aggregator credential).
-      Long-lived; run in its own terminal.
+      Run operator OP's warpdrive node locally. Default OP=1 listens
+      on :8000 (HTTP) and :9000 (libp2p) under out/node-data. The 2-op
+      quickstart runs this in two terminals — terminal A leaves OP
+      unset (= 1), terminal B uses `OP=2 task run-node`.
+
+      Each operator HD-derives its signing key from its own BIP39
+      mnemonic: WARPDRIVE_SIGNING_MNEMONIC (OP=1) or
+      WARPDRIVE_SIGNING_MNEMONIC_N (OP>1). The Stellar aggregator
+      credential is the same for every operator — they all submit
+      transactions paid from DEPLOYER_SECRET.
     cmds:
-      - mkdir -p out/node-data
       - |
         set -euo pipefail
-        : "${WARPDRIVE_SIGNING_MNEMONIC:?WARPDRIVE_SIGNING_MNEMONIC is required}"
         : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required (used as WARPDRIVE_AGGREGATOR_STELLAR_CREDENTIAL)}"
+        . scripts/op-env.sh
+        test -n "$OP_MNEMONIC" \
+            || { echo "$OP_MNEMONIC_VAR is empty — re-run scripts/bootstrap-keys.sh with OPERATORS=${OP_INDEX}"; exit 1; }
+        mkdir -p "$OP_DATA"
+        echo "starting op ${OP_INDEX} on http=:${OP_PORT} p2p=:${OP_P2P_PORT} data=$OP_DATA"
         WARPDRIVE_HOME="$PWD" \
-        WARPDRIVE_DATA="$PWD/out/node-data" \
+        WARPDRIVE_DATA="$PWD/$OP_DATA" \
+        WARPDRIVE_PORT="$OP_PORT" \
+        WARPDRIVE_SIGNING_MNEMONIC="$OP_MNEMONIC" \
         WARPDRIVE_AGGREGATOR_STELLAR_CREDENTIAL="${WARPDRIVE_AGGREGATOR_STELLAR_CREDENTIAL:-$DEPLOYER_SECRET}" \
-        warpdrive
+        warpdrive --port "$OP_PORT"
 
   # ── frontend ──────────────────────────────────────────────────────────
 
@@ -514,14 +572,27 @@ tasks:
 
   wire-service:
     desc: |
-      Phase 2 (requires `task run-node` running in another terminal):
-      upload all four component wasms to the node, assemble
-      service/service.json, then register it with the local node via
-      /dev/services. After this, run `task register-signer`.
+      Phase 2 (requires every `task run-node` already running in its own
+      terminal): upload all four component wasms to EACH operator's node,
+      assemble service/service.json, then activate that service on every
+      operator's dispatcher.
+
+      Walks OP=1..{{.OPERATORS}} sequentially — each upload/register is
+      against the corresponding node's HTTP port. After this completes,
+      run `task register-signers`.
     cmds:
-      - task: upload-cron
-      - task: upload-twap
-      - task: upload-median
-      - task: upload-aggregator
+      - |
+        set -euo pipefail
+        for i in $(seq 1 {{.OPERATORS}}); do
+            echo "── wiring op $i ──"
+            OP=$i task upload-cron
+            OP=$i task upload-twap
+            OP=$i task upload-median
+            OP=$i task upload-aggregator
+        done
       - task: build-service
-      - task: register-service
+      - |
+        set -euo pipefail
+        for i in $(seq 1 {{.OPERATORS}}); do
+            OP=$i task register-service
+        done

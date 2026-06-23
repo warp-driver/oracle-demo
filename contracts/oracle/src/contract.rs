@@ -239,31 +239,68 @@ impl OracleContract {
             return Err(OracleError::EventAlreadySeen);
         }
 
-        let verification_addr = storage::get_verification_contract(&env);
-        match Ed25519VerificationClient::new(&env, &verification_addr).try_verify(
-            &envelope_bytes,
-            &sig_data.signatures,
-            &sig_data.signers,
-            &sig_data.reference_block,
-        ) {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => return Err(OracleError::UnknownVerificationError),
-            Err(Ok(e)) => return Err(OracleError::from(e)),
-            Err(Err(_)) => return Err(OracleError::OtherInvocationError),
-        }
-
+        // Decode the payload BEFORE verifying so we know which crypto
+        // check the variant wants:
+        //
+        // * Round 2 is per-Vectr — each operator's twap differs (CoinGecko
+        //   drift), so the host can't quorum-collapse them. We accept
+        //   single-signer envelopes via `try_check_one`, which only
+        //   checks the sig is from a registered signer with non-zero
+        //   weight. The bundle on chain accumulates each one until the
+        //   release threshold is crossed.
+        //
+        // * Round 3 (median) is deterministic — every operator runs the
+        //   same median over the same bundle, so the host quorum-
+        //   collapses them into one envelope with N signatures.
+        //   `try_verify` enforces sum-of-weights ≥ required_weight at
+        //   the reference_block.
         let payload = SubmissionPayload::from_xdr(&env, &envelope.payload)
             .map_err(|_| OracleError::InvalidEnvelope)?;
+        let verification_addr = storage::get_verification_contract(&env);
+        let verification = Ed25519VerificationClient::new(&env, &verification_addr);
+
         match payload {
-            SubmissionPayload::Round2(p) => Self::apply_round2(
-                &env,
-                &verification_addr,
-                &sig_data,
-                &envelope_bytes,
-                &event_id,
-                p,
-            ),
-            SubmissionPayload::Final(p) => Self::apply_final(&env, &event_id, p),
+            SubmissionPayload::Round2(p) => {
+                if sig_data.signatures.len() != 1 || sig_data.signers.len() != 1 {
+                    return Err(OracleError::LengthMismatch);
+                }
+                let signer = sig_data.signers.get(0).expect("len==1");
+                let signature = sig_data.signatures.get(0).expect("len==1");
+                match verification.try_check_one(
+                    &envelope_bytes,
+                    &signature,
+                    &signer,
+                    &Some(sig_data.reference_block),
+                ) {
+                    Ok(Ok(_weight)) => {}
+                    Ok(Err(_)) => return Err(OracleError::UnknownVerificationError),
+                    Err(Ok(e)) => return Err(OracleError::from(e)),
+                    Err(Err(_)) => return Err(OracleError::OtherInvocationError),
+                }
+                Self::apply_round2(
+                    &env,
+                    &verification_addr,
+                    &signer,
+                    &signature,
+                    &envelope_bytes,
+                    &event_id,
+                    p,
+                )
+            }
+            SubmissionPayload::Final(p) => {
+                match verification.try_verify(
+                    &envelope_bytes,
+                    &sig_data.signatures,
+                    &sig_data.signers,
+                    &sig_data.reference_block,
+                ) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => return Err(OracleError::UnknownVerificationError),
+                    Err(Ok(e)) => return Err(OracleError::from(e)),
+                    Err(Err(_)) => return Err(OracleError::OtherInvocationError),
+                }
+                Self::apply_final(&env, &event_id, p)
+            }
         }
     }
 
@@ -272,21 +309,12 @@ impl OracleContract {
     fn apply_round2(
         env: &Env,
         verification_addr: &Address,
-        sig_data: &Ed25519SignatureData,
+        signer: &BytesN<32>,
+        signature: &BytesN<64>,
         envelope_bytes: &Bytes,
         event_id: &BytesN<20>,
         payload: Round2Payload,
     ) -> Result<(), OracleError> {
-        // For a Round 2 attestation we expect exactly one signature —
-        // each Vectr's payload differs (CoinGecko prices drift between
-        // fetches) so the host can't quorum-collapse them. The
-        // `event_id_salt` set by the twap-circuit makes every Vectr's
-        // event_id unique, so the QuorumQueue holds one sig per id.
-        if sig_data.signatures.len() != 1 {
-            return Err(OracleError::LengthMismatch);
-        }
-        let signer = sig_data.signers.get(0).expect("len==1");
-        let signature = sig_data.signatures.get(0).expect("len==1");
 
         let info = storage::get_request(env, payload.request_id)
             .ok_or(OracleError::UnknownRequest)?;
@@ -300,7 +328,7 @@ impl OracleContract {
         // Dedup: one attestation per Vectr per request.
         let mut bundle = storage::load_bundle(env, payload.request_id);
         for existing in bundle.attestations.iter() {
-            if existing.signer == signer {
+            if &existing.signer == signer {
                 return Err(OracleError::DuplicateAttestation);
             }
         }
