@@ -240,6 +240,12 @@ tasks:
       Register service/service.json with the local warpdrive node via
       /dev/services. Saves the service hash to out/service.hash and
       activates the service in the dispatcher.
+
+      Idempotent: if the dispatcher already has a service registered
+      under the same project_root manager (typical after a
+      `wire-service` re-run when component digests have changed), the
+      old registration is deleted via `DELETE /services` and the new
+      one is activated in its place.
     cmds:
       - mkdir -p out
       - |
@@ -251,9 +257,36 @@ tasks:
             || { echo "no hash returned from /dev/services"; exit 1; }
         echo "$HASH" > out/service.hash
         echo "service hash: $HASH"
-        curl -sSf -X POST "http://127.0.0.1:8000/dev/services/$HASH" \
-            -o /dev/null
-        echo "service registered with dispatcher"
+
+        activate() {
+            curl -sS -o /tmp/oracle-activate.body -w '%{http_code}' \
+                -X POST "http://127.0.0.1:8000/dev/services/$HASH"
+        }
+        STATUS=$(activate)
+        if [ "$STATUS" = "200" ] || [ "$STATUS" = "204" ]; then
+            echo "service registered with dispatcher"
+            exit 0
+        fi
+        BODY=$(cat /tmp/oracle-activate.body 2>/dev/null || true)
+        case "$BODY" in
+            *"already registered"*)
+                echo "service manager already registered — deleting old registration"
+                MANAGER=$(jq -c '.manager' {{.SERVICE_FILE}})
+                jq -nc --argjson m "$MANAGER" '{service_managers: [$m]}' \
+                    | curl -sSf -X DELETE http://127.0.0.1:8000/services \
+                        -H "Content-Type: application/json" \
+                        --data-binary @-
+                STATUS=$(activate)
+                test "$STATUS" = "200" -o "$STATUS" = "204" \
+                    || { echo "re-activation failed: HTTP $STATUS"; cat /tmp/oracle-activate.body; exit 1; }
+                echo "service re-registered with dispatcher"
+                ;;
+            *)
+                echo "activation failed: HTTP $STATUS"
+                echo "$BODY"
+                exit 1
+                ;;
+        esac
 
   register-manager:
     desc: |
