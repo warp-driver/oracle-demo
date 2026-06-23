@@ -272,18 +272,19 @@ export async function tailEvents(args: {
   const filters: rpc.Api.EventFilter[] = [
     { type: "contract", contractIds: [args.oracleId] },
   ];
-  const request: rpc.Server.GetEventsRequest = {
-    filters,
-    limit: args.limit ?? 50,
-  };
-  if (args.cursor) {
-    request.cursor = args.cursor;
-  } else {
-    const latest = await server.getLatestLedger();
-    // Testnet closes a ledger ~every 5s, so 1000 ledgers ≈ 80 minutes
-    // — plenty for the demo's recent-events ribbon.
-    request.startLedger = Math.max(1, latest.sequence - 1000);
-  }
+  const baseLimit = args.limit ?? 50;
+  const request: rpc.Server.GetEventsRequest = args.cursor
+    ? { filters, limit: baseLimit, cursor: args.cursor }
+    : {
+        filters,
+        limit: baseLimit,
+        // Testnet closes a ledger ~every 5 s, so 1000 ledgers ≈ 80 min —
+        // plenty for the demo's recent-events ribbon.
+        startLedger: Math.max(
+          1,
+          (await server.getLatestLedger()).sequence - 1000,
+        ),
+      };
   const resp = await server.getEvents(request);
   const out: OracleEvent[] = [];
   for (const ev of resp.events) {
