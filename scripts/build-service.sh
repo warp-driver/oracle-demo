@@ -27,18 +27,19 @@
 #   out/twap.digest       64-hex content digest               (from `task upload-twap`)
 #   out/median.digest     64-hex content digest               (from `task upload-median`)
 #   out/aggregator.digest 64-hex content digest               (from `task upload-aggregator`)
-#
-# Optional env (with defaults matching the Taskfile):
-#
 #   SERVICE_FILE          target path (default: service/service.json)
 #   TRIGGER_CHAIN         chain key for both Stellar-event triggers (default: stellar:testnet)
 #   MANAGER_CHAIN         chain key for the service manager        (default: stellar:testnet)
+#   CRON_SCHEDULE         cron expression for fetch_prices         (default: every 30 s)
+#                         Set to "0 */10 * * * *" for the
+#                         spec-aligned every-10-min cadence.
 
 set -euo pipefail
 
 SERVICE_FILE="${SERVICE_FILE:-service/service.json}"
 TRIGGER_CHAIN="${TRIGGER_CHAIN:-stellar:testnet}"
 MANAGER_CHAIN="${MANAGER_CHAIN:-stellar:testnet}"
+CRON_SCHEDULE="${CRON_SCHEDULE:-*/30 * * * * *}"
 
 # ── prerequisite files ────────────────────────────────────────────────
 
@@ -72,7 +73,7 @@ warpdrive-cli service -f "$SERVICE_FILE" workflow add --id fetch_prices
 
 warpdrive-cli service -f "$SERVICE_FILE" workflow trigger \
     --id fetch_prices set-cron \
-    --schedule "0 */10 * * * *"
+    --schedule "$CRON_SCHEDULE"
 
 warpdrive-cli service -f "$SERVICE_FILE" workflow component \
     --id fetch_prices set-source-digest --digest "$CRON_DIGEST"

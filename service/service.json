@@ -110,7 +110,7 @@
     "fetch_prices": {
       "trigger": {
         "cron": {
-          "schedule": "0 */10 * * * *",
+          "schedule": "*/30 * * * * *",
           "start_time": null,
           "end_time": null
         }

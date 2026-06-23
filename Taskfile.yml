@@ -60,6 +60,10 @@ vars:
   MEDIAN_WASM: components/median-circuit/target/wasm32-wasip1/release/median_circuit.wasm
   AGGREGATOR_WASM: components/aggregator/target/wasm32-wasip1/release/oracle_aggregator.wasm
   SERVICE_FILE: '{{.SERVICE_FILE | default "service/service.json"}}'
+  # Defaults to every 30 s for demo responsiveness. Set CRON_SCHEDULE
+  # to "0 */10 * * * *" (the spec's every-10-minutes cadence) before
+  # `task wire-service` for production.
+  CRON_SCHEDULE: '{{.CRON_SCHEDULE | default "*/30 * * * * *"}}'
 
 tasks:
   fetch-wit:
@@ -233,6 +237,7 @@ tasks:
         SERVICE_FILE={{.SERVICE_FILE}}
         TRIGGER_CHAIN={{.TRIGGER_CHAIN}}
         MANAGER_CHAIN={{.MANAGER_CHAIN}}
+        CRON_SCHEDULE='{{.CRON_SCHEDULE}}'
         ./scripts/build-service.sh
 
   register-service:
