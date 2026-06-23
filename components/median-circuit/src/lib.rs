@@ -43,25 +43,33 @@ fn run_inner(trigger_action: TriggerAction) -> anyhow::Result<Vec<WasmResponse>>
 
     let bundle = trigger::parse_round2_ready(&event)?;
 
-    let valid_twaps: Vec<i128> = bundle
+    // Collect the valid TWAPs *and* their attestation timestamps. We
+    // need the latter for a deterministic `computed_at` field — using
+    // `wall_clock::now()` would differ by milliseconds across operators
+    // and produce different envelope bytes for the same `event_id`,
+    // which blocks signature quorum.
+    let (valid_twaps, valid_times): (Vec<i128>, Vec<u64>) = bundle
         .attestations
         .iter()
         .filter(|a| verify::is_valid(a).unwrap_or(false))
-        .map(|a| a.twap)
-        .collect();
+        .map(|a| (a.twap, a.computed_at))
+        .unzip();
     if valid_twaps.is_empty() {
         anyhow::bail!("no valid Round 2 attestations");
     }
 
     let median = compute_median(&valid_twaps);
-    let now = wasi::clocks::wall_clock::now().seconds;
+    // Latest attestation timestamp — same set across operators, so the
+    // resulting payload bytes are byte-identical and the on-chain queue
+    // can collapse the per-operator signatures into one envelope.
+    let computed_at = *valid_times.iter().max().expect("non-empty by check above");
 
     let payload_bytes = payload::encode_final(
         &bundle.asset,
         bundle.request_id,
         median,
         valid_twaps.len() as u32,
-        now,
+        computed_at,
     )?;
 
     let mut salt = bundle.request_id.to_le_bytes().to_vec();
