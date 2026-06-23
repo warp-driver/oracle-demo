@@ -238,6 +238,7 @@ tasks:
         TRIGGER_CHAIN={{.TRIGGER_CHAIN}}
         MANAGER_CHAIN={{.MANAGER_CHAIN}}
         CRON_SCHEDULE='{{.CRON_SCHEDULE}}'
+        COINGECKO_API_KEY="${COINGECKO_API_KEY:-}"
         ./scripts/build-service.sh
 
   register-service:

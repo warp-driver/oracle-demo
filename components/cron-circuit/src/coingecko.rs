@@ -2,47 +2,84 @@ use anyhow::{anyhow, Context, Result};
 use wstd::http::{Body, Client, Request};
 use wstd::runtime::block_on;
 
+use crate::host;
+
 /// CoinGecko simple-price endpoint. The host's HTTP allowlist (set in
-/// service.json as `allowed_http_hosts = ["api.coingecko.com"]`) MUST
-/// authorise this exact host or the request is rejected before it leaves
-/// the sandbox.
-const URL: &str = "https://api.coingecko.com/api/v3/simple/price\
+/// service.json as `allowed_http_hosts = ["api.coingecko.com"]` for
+/// public, or `["api.coingecko.com", "pro-api.coingecko.com"]` for the
+/// paid tier) MUST authorise the host we're calling or the request is
+/// rejected before it leaves the sandbox.
+const PUBLIC_URL: &str = "https://api.coingecko.com/api/v3/simple/price\
+?ids=bitcoin,ethereum&vs_currencies=usd&include_last_updated_at=true";
+
+/// CoinGecko Demo / Pro endpoint. Used when the workflow's
+/// `coingecko_api_key` config var is set. Demo keys are free at
+/// <https://www.coingecko.com/en/api/pricing> and ~10x the public
+/// rate limit (10–50 req/min → ~500 req/min).
+const PRO_URL: &str = "https://pro-api.coingecko.com/api/v3/simple/price\
 ?ids=bitcoin,ethereum&vs_currencies=usd&include_last_updated_at=true";
 
 /// Fetch the latest BTC/USD and ETH/USD spot prices.
 ///
 /// Returns one `(label, ts, price_e7)` tuple per asset — BTC first,
-/// then ETH. Errors propagate; the caller surfaces them through
-/// `run_inner` so node logs show the underlying HTTP / parse failure.
+/// then ETH. Errors include the underlying HTTP status + first 200
+/// bytes of the response body so a rate-limit (429 with no `bitcoin`
+/// key) is recognisable from the node log without external tooling.
 pub fn fetch_now() -> Result<Vec<(&'static str, u64, i128)>> {
-    let body: serde_json::Value = block_on(async { fetch_json(URL).await })
+    let api_key = host::config_var("coingecko_api_key");
+    let url = match &api_key {
+        Some(_) => PRO_URL,
+        None => PUBLIC_URL,
+    };
+    let body = block_on(async { fetch(url, api_key.as_deref()).await })
         .context("coingecko GET failed")?;
+    let json: serde_json::Value = serde_json::from_slice(&body)
+        .with_context(|| format!("coingecko response not JSON: {}", preview(&body)))?;
     Ok(vec![
-        extract(&body, "bitcoin", "btc_usd")?,
-        extract(&body, "ethereum", "eth_usd")?,
+        extract(&json, "bitcoin", "btc_usd", &body)?,
+        extract(&json, "ethereum", "eth_usd", &body)?,
     ])
 }
 
-/// Inlined helper — equivalent to `warpdrive-wasi-utils`' `fetch_json`,
-/// which isn't published on crates.io. Runs under the `wstd` reactor
-/// the engine starts for every WASI component.
-async fn fetch_json(url: &str) -> Result<serde_json::Value> {
-    let request = Request::get(url).body(Body::empty())?;
+/// GET `url`, optionally with the CoinGecko Demo/Pro key header set,
+/// return the raw body. Surfaces non-2xx status codes with the body
+/// embedded so the caller can decide whether to retry / log / bail.
+async fn fetch(url: &str, api_key: Option<&str>) -> Result<Vec<u8>> {
+    let mut builder = Request::get(url);
+    if let Some(key) = api_key {
+        builder = builder.header("x-cg-demo-api-key", key);
+    }
+    let request = builder.body(Body::empty())?;
     let mut response = Client::new().send(request).await?;
-    let bytes = response.body_mut().contents().await?;
-    Ok(serde_json::from_slice(&bytes)?)
+    let status = response.status();
+    let bytes = response.body_mut().contents().await?.to_vec();
+    if !status.is_success() {
+        return Err(anyhow!(
+            "coingecko returned HTTP {} — body: {}",
+            status.as_u16(),
+            preview(&bytes)
+        ));
+    }
+    Ok(bytes)
 }
 
-/// Pluck `<coin>.usd` (f64) and `<coin>.last_updated_at` (u64) out of the
-/// response and convert the price to a 7-decimal `i128` (`(p * 1e7).round()`).
+/// Pluck `<coin>.usd` (f64) and `<coin>.last_updated_at` (u64) out of
+/// the parsed response and convert the price to a 7-decimal `i128`
+/// (`(p * 1e7).round()`). On a missing-key failure we include the
+/// raw body preview so a 200-OK rate-limit page (yes, CoinGecko does
+/// that sometimes) is debuggable from the node log.
 fn extract(
     body: &serde_json::Value,
     coin: &str,
     label: &'static str,
+    raw: &[u8],
 ) -> Result<(&'static str, u64, i128)> {
-    let entry = body
-        .get(coin)
-        .ok_or_else(|| anyhow!("coingecko response missing `{coin}`"))?;
+    let entry = body.get(coin).ok_or_else(|| {
+        anyhow!(
+            "coingecko response missing `{coin}` — likely rate-limited; body: {}",
+            preview(raw)
+        )
+    })?;
 
     let price = entry
         .get("usd")
@@ -61,4 +98,17 @@ fn extract(
 
     let price_e7 = (price * 1e7).round() as i128;
     Ok((label, ts, price_e7))
+}
+
+/// Trim raw bytes to a short, UTF-8-safe debug preview for inclusion
+/// in error chains. Long binary responses don't blow up the log line.
+fn preview(bytes: &[u8]) -> String {
+    let limit = 200;
+    let slice = if bytes.len() > limit { &bytes[..limit] } else { bytes };
+    let text = String::from_utf8_lossy(slice);
+    if bytes.len() > limit {
+        format!("{text}… ({} bytes total)", bytes.len())
+    } else {
+        text.into_owned()
+    }
 }

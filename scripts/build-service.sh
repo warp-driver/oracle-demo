@@ -33,6 +33,13 @@
 #   CRON_SCHEDULE         cron expression for fetch_prices         (default: every 30 s)
 #                         Set to "0 */10 * * * *" for the
 #                         spec-aligned every-10-min cadence.
+#   COINGECKO_API_KEY     optional Demo / Pro key (free at
+#                         https://www.coingecko.com/en/api/pricing).
+#                         Bakes into the cron-circuit's
+#                         `coingecko_api_key` config var; the circuit
+#                         then targets pro-api.coingecko.com with the
+#                         `x-cg-demo-api-key` header. Without it the
+#                         public host's ~10–30 req/min limit applies.
 
 set -euo pipefail
 
@@ -78,9 +85,25 @@ warpdrive-cli service -f "$SERVICE_FILE" workflow trigger \
 warpdrive-cli service -f "$SERVICE_FILE" workflow component \
     --id fetch_prices set-source-digest --digest "$CRON_DIGEST"
 
+# Allow both the free public and Pro/Demo CoinGecko hosts. The cron
+# circuit picks the host based on whether COINGECKO_API_KEY is set in
+# the workflow's component config. Each --http-hosts flag is one
+# host; passing a comma-separated string registers it as one literal
+# hostname (and matches nothing on the wire).
 warpdrive-cli service -f "$SERVICE_FILE" workflow component \
     --id fetch_prices permissions \
-    --http-hosts api.coingecko.com
+    --http-hosts api.coingecko.com \
+    --http-hosts pro-api.coingecko.com
+
+# Optional: thread a CoinGecko Demo / Pro API key from the build env
+# into the component's `coingecko_api_key` config var. Demo keys are
+# free at https://www.coingecko.com/en/api/pricing and raise the
+# rate limit from ~10–30 req/min to ~500 req/min.
+if [ -n "${COINGECKO_API_KEY:-}" ]; then
+    warpdrive-cli service -f "$SERVICE_FILE" workflow component \
+        --id fetch_prices config \
+        --values "coingecko_api_key=$COINGECKO_API_KEY"
+fi
 
 warpdrive-cli service -f "$SERVICE_FILE" workflow submit \
     --id fetch_prices set-none

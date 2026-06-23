@@ -122,7 +122,8 @@
         "permissions": {
           "allowed_http_hosts": {
             "only": [
-              "api.coingecko.com"
+              "api.coingecko.com",
+              "pro-api.coingecko.com"
             ]
           },
           "file_system": false,
