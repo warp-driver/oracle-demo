@@ -116,6 +116,21 @@ pub struct FinalPayload {
     pub computed_at: u64,
 }
 
+/// Discriminated payload the off-chain Vectrs put inside the signed
+/// envelope. The warpdrive node's submission manager always invokes
+/// `verify_xlm` on the handler — there is no per-round entrypoint to
+/// route on — so we wrap each round's struct in a tagged enum and
+/// dispatch on the variant inside the handler.
+#[contracttype]
+#[derive(Clone)]
+pub enum SubmissionPayload {
+    /// Single-Vectr Round 2 attestation: this Vectr's geometric TWAP.
+    Round2(Round2Payload),
+    /// Quorum-signed Round 3 attestation: the median of the Round 2
+    /// bundle.
+    Final(FinalPayload),
+}
+
 /// One Vectr's Round 2 contribution as recorded on chain — what's bundled
 /// in the `Round2Ready` event for downstream composition circuits.
 #[contracttype]
@@ -197,111 +212,22 @@ impl OracleContract {
         id
     }
 
-    // ── round 2: single-signer attestations ──────────────────────────
+    // ── handler entry — the warpdrive node submits everything here ───
 
-    /// Each Vectr submits one of these for every TWAP request. The
-    /// envelope is `XlmEnvelope { event_id, ordering, payload =
-    /// XDR(MessageWithId { trigger_id = request_id, message =
-    /// XDR(Round2Payload) }) }`. Round 2 inherently can NOT match
-    /// across Vectrs (CoinGecko spot prices drift between fetches) so
-    /// this entry does single-signer validation via `check_one` rather
-    /// than threshold `verify`.
+    /// `StellarHandlerInterface::verify_xlm` — the single entry the
+    /// warpdrive node's submission manager invokes for every
+    /// aggregated submission against this handler. The envelope payload
+    /// is a tagged `SubmissionPayload` whose variant decides whether
+    /// this is a Round 2 single-Vectr attestation or a Round 3
+    /// quorum-signed final.
     ///
-    /// When the per-request attestation count crosses
-    /// `quorum_numerator / quorum_denominator` of the registered signer
-    /// set, we emit a `Round2Ready` event carrying the whole bundle —
-    /// that's the "composition event" the median circuits subscribe to.
-    pub fn submit_round2(
-        env: Env,
-        envelope_bytes: Bytes,
-        sig_data: Ed25519SignatureData,
-    ) -> Result<(), OracleError> {
-        if sig_data.signatures.len() != 1 || sig_data.signers.len() != 1 {
-            return Err(OracleError::LengthMismatch);
-        }
-        let envelope = XlmEnvelope::from_xdr(&env, &envelope_bytes)
-            .map_err(|_| OracleError::InvalidEnvelope)?;
-        let event_id = envelope.event_id.clone();
-        if storage::is_event_seen(&env, &event_id) {
-            return Err(OracleError::EventAlreadySeen);
-        }
-
-        // Validate the single sig is one of our registered Vectrs.
-        let signer = sig_data.signers.get(0).expect("len==1");
-        let signature = sig_data.signatures.get(0).expect("len==1");
-        let verification_addr = storage::get_verification_contract(&env);
-        match Ed25519VerificationClient::new(&env, &verification_addr).try_check_one(
-            &envelope_bytes,
-            &signature,
-            &signer,
-            &Some(sig_data.reference_block),
-        ) {
-            Ok(Ok(_weight)) => {}
-            Ok(Err(_)) => return Err(OracleError::UnknownVerificationError),
-            Err(Ok(e)) => return Err(OracleError::from(e)),
-            Err(Err(_)) => return Err(OracleError::OtherInvocationError),
-        }
-
-        // Decode payload directly off the envelope — we don't use the
-        // `MessageWithId` wrapper here because Round 2 payloads already
-        // carry the request_id field. Same pattern hodlers-app uses.
-        let payload = Round2Payload::from_xdr(&env, &envelope.payload)
-            .map_err(|_| OracleError::InvalidRound2Payload)?;
-
-        let info = storage::get_request(&env, payload.request_id)
-            .ok_or(OracleError::UnknownRequest)?;
-        if info.asset != payload.asset || info.range_secs != payload.range_secs {
-            return Err(OracleError::InvalidRound2Payload);
-        }
-        if storage::get_final(&env, payload.request_id).is_some() {
-            return Err(OracleError::AlreadyFinalized);
-        }
-
-        // Dedup: one attestation per Vectr per request.
-        let mut bundle = storage::load_bundle(&env, payload.request_id);
-        for existing in bundle.attestations.iter() {
-            if existing.signer == signer {
-                return Err(OracleError::DuplicateAttestation);
-            }
-        }
-        bundle.attestations.push_back(Round2Attestation {
-            signer: signer.clone(),
-            signature: signature.clone(),
-            envelope: envelope_bytes.clone(),
-            twap: payload.twap,
-            computed_at: payload.computed_at,
-        });
-        storage::save_bundle(&env, payload.request_id, &bundle);
-        storage::mark_event_seen(&env, &event_id);
-        storage::extend_instance_ttl(&env);
-
-        // Threshold release: once we hit (or pass) ceil(total_signers * num/denom),
-        // emit the composition event exactly once.
-        if !storage::round2_released(&env, payload.request_id) {
-            let total = security_signer_count(&env, &verification_addr);
-            let threshold = ceil_div(total * storage::get_quorum_numerator(&env), storage::get_quorum_denominator(&env));
-            if bundle.attestations.len() >= threshold {
-                storage::mark_round2_released(&env, payload.request_id);
-                env.events().publish(
-                    (symbol_short!("r2ready"), payload.request_id),
-                    Round2ReadyData {
-                        asset: payload.asset.clone(),
-                        range_secs: payload.range_secs,
-                        bundle: bundle.clone(),
-                    },
-                );
-            }
-        }
-        Ok(())
-    }
-
-    // ── round 3: quorum-signed final result ───────────────────────────
-
-    /// Submitted by the aggregator after Round 3 (median) circuits agree.
-    /// Goes through full ed25519-verification quorum because Round 3 is
-    /// deterministic (every Vectr operates on the same Round 2 bundle and
-    /// computes the same median).
-    pub fn submit_final(
+    /// Both variants go through the same `try_verify` call (the
+    /// quorum is global to the security contract; with a single
+    /// operator at 1/1, one sig satisfies it; with N at 4/5, Round 2
+    /// payloads need their `event_id_salt` to be unique per Vectr so
+    /// the host doesn't try to quorum-collapse different-value
+    /// attestations).
+    pub fn verify_xlm(
         env: Env,
         envelope_bytes: Bytes,
         sig_data: Ed25519SignatureData,
@@ -326,24 +252,120 @@ impl OracleContract {
             Err(Err(_)) => return Err(OracleError::OtherInvocationError),
         }
 
-        let payload = FinalPayload::from_xdr(&env, &envelope.payload)
-            .map_err(|_| OracleError::InvalidFinalPayload)?;
+        let payload = SubmissionPayload::from_xdr(&env, &envelope.payload)
+            .map_err(|_| OracleError::InvalidEnvelope)?;
+        match payload {
+            SubmissionPayload::Round2(p) => Self::apply_round2(
+                &env,
+                &verification_addr,
+                &sig_data,
+                &envelope_bytes,
+                &event_id,
+                p,
+            ),
+            SubmissionPayload::Final(p) => Self::apply_final(&env, &event_id, p),
+        }
+    }
 
-        let info = storage::get_request(&env, payload.request_id)
+    // ── internal round 2 logic ────────────────────────────────────────
+
+    fn apply_round2(
+        env: &Env,
+        verification_addr: &Address,
+        sig_data: &Ed25519SignatureData,
+        envelope_bytes: &Bytes,
+        event_id: &BytesN<20>,
+        payload: Round2Payload,
+    ) -> Result<(), OracleError> {
+        // For a Round 2 attestation we expect exactly one signature —
+        // each Vectr's payload differs (CoinGecko prices drift between
+        // fetches) so the host can't quorum-collapse them. The
+        // `event_id_salt` set by the twap-circuit makes every Vectr's
+        // event_id unique, so the QuorumQueue holds one sig per id.
+        if sig_data.signatures.len() != 1 {
+            return Err(OracleError::LengthMismatch);
+        }
+        let signer = sig_data.signers.get(0).expect("len==1");
+        let signature = sig_data.signatures.get(0).expect("len==1");
+
+        let info = storage::get_request(env, payload.request_id)
+            .ok_or(OracleError::UnknownRequest)?;
+        if info.asset != payload.asset || info.range_secs != payload.range_secs {
+            return Err(OracleError::InvalidRound2Payload);
+        }
+        if storage::get_final(env, payload.request_id).is_some() {
+            return Err(OracleError::AlreadyFinalized);
+        }
+
+        // Dedup: one attestation per Vectr per request.
+        let mut bundle = storage::load_bundle(env, payload.request_id);
+        for existing in bundle.attestations.iter() {
+            if existing.signer == signer {
+                return Err(OracleError::DuplicateAttestation);
+            }
+        }
+        bundle.attestations.push_back(Round2Attestation {
+            signer: signer.clone(),
+            signature: signature.clone(),
+            envelope: envelope_bytes.clone(),
+            twap: payload.twap,
+            computed_at: payload.computed_at,
+        });
+        storage::save_bundle(env, payload.request_id, &bundle);
+        storage::mark_event_seen(env, event_id);
+        storage::extend_instance_ttl(env);
+
+        // Threshold release: once we hit (or pass) ceil(total_signers * num/denom),
+        // emit the composition event exactly once.
+        if !storage::round2_released(env, payload.request_id) {
+            let total = security_signer_count(env, verification_addr);
+            let threshold = ceil_div(
+                total * storage::get_quorum_numerator(env),
+                storage::get_quorum_denominator(env),
+            );
+            if bundle.attestations.len() >= threshold {
+                storage::mark_round2_released(env, payload.request_id);
+                env.events().publish(
+                    (symbol_short!("r2ready"), payload.request_id),
+                    Round2ReadyData {
+                        asset: payload.asset.clone(),
+                        range_secs: payload.range_secs,
+                        bundle: bundle.clone(),
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
+
+    // ── internal final logic ──────────────────────────────────────────
+
+    fn apply_final(
+        env: &Env,
+        event_id: &BytesN<20>,
+        payload: FinalPayload,
+    ) -> Result<(), OracleError> {
+        let info = storage::get_request(env, payload.request_id)
             .ok_or(OracleError::UnknownRequest)?;
         if info.asset != payload.asset {
             return Err(OracleError::InvalidFinalPayload);
         }
-        if !storage::round2_released(&env, payload.request_id) {
+        if !storage::round2_released(env, payload.request_id) {
             return Err(OracleError::RoundNotReady);
         }
-        if storage::get_final(&env, payload.request_id).is_some() {
+        if storage::get_final(env, payload.request_id).is_some() {
             return Err(OracleError::AlreadyFinalized);
         }
 
-        storage::save_final(&env, payload.request_id, &payload.asset, payload.median, payload.computed_at);
-        storage::mark_event_seen(&env, &event_id);
-        storage::extend_instance_ttl(&env);
+        storage::save_final(
+            env,
+            payload.request_id,
+            &payload.asset,
+            payload.median,
+            payload.computed_at,
+        );
+        storage::mark_event_seen(env, event_id);
+        storage::extend_instance_ttl(env);
 
         env.events().publish(
             (symbol_short!("finaltwp"), payload.request_id),

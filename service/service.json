@@ -5,7 +5,7 @@
       "trigger": {
         "stellar_contract_event": {
           "chain": "stellar:testnet",
-          "contract_id": "CAYHLR46IEWUAO2GU5DOAYNVTE4AFVYABYAH2D5BQXSB2JUXLKFN26OE",
+          "contract_id": "CBJGQ4NXQYGQ2AJHIJ6U4BHVZKIPVAIQVRDFKSTXIZ5UI6R4U4QNYXUR",
           "topic_segments": [
             {
               "exact": {
@@ -18,7 +18,7 @@
       },
       "component": {
         "source": {
-          "digest": "958faa20f0c45f78e0ab533dbea840482d41f98e94cf198cd8164b42a4d6f49b"
+          "digest": "291d44c21b58d133aea689967a27294f577dc1827ea24b6e50cfeff117a9b838"
         },
         "permissions": {
           "allowed_http_hosts": "none",
@@ -47,7 +47,7 @@
             "time_limit_seconds": null,
             "config": {
               "chain": "stellar:testnet",
-              "service_handler": "CAYHLR46IEWUAO2GU5DOAYNVTE4AFVYABYAH2D5BQXSB2JUXLKFN26OE"
+              "service_handler": "CBJGQ4NXQYGQ2AJHIJ6U4BHVZKIPVAIQVRDFKSTXIZ5UI6R4U4QNYXUR"
             },
             "env_keys": []
           }
@@ -58,7 +58,7 @@
       "trigger": {
         "stellar_contract_event": {
           "chain": "stellar:testnet",
-          "contract_id": "CAYHLR46IEWUAO2GU5DOAYNVTE4AFVYABYAH2D5BQXSB2JUXLKFN26OE",
+          "contract_id": "CBJGQ4NXQYGQ2AJHIJ6U4BHVZKIPVAIQVRDFKSTXIZ5UI6R4U4QNYXUR",
           "topic_segments": [
             {
               "exact": {
@@ -71,7 +71,7 @@
       },
       "component": {
         "source": {
-          "digest": "9e08f64dfc30ec691d8d21eaebe4d9280bd8435b1302d5e3b4b86ab9bf119089"
+          "digest": "eb80c382d6f94d9cbc616948b98e15c7003be848147ca684ea922bfa0496f23e"
         },
         "permissions": {
           "allowed_http_hosts": "none",
@@ -100,7 +100,7 @@
             "time_limit_seconds": null,
             "config": {
               "chain": "stellar:testnet",
-              "service_handler": "CAYHLR46IEWUAO2GU5DOAYNVTE4AFVYABYAH2D5BQXSB2JUXLKFN26OE"
+              "service_handler": "CBJGQ4NXQYGQ2AJHIJ6U4BHVZKIPVAIQVRDFKSTXIZ5UI6R4U4QNYXUR"
             },
             "env_keys": []
           }

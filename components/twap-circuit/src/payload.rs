@@ -1,19 +1,22 @@
-//! XDR-encode `Round2Payload` so `OracleContract::submit_round2` can
-//! `Round2Payload::from_xdr` the bytes back.
+//! XDR-encode `SubmissionPayload::Round2(Round2Payload)` so the on-chain
+//! `OracleContract::verify_xlm` decodes the bytes back and dispatches.
 //!
-//! Soroban serializes a `#[contracttype]` struct as
-//! `ScVal::Map(Vec<ScMapEntry>)` with entries sorted by `key`
-//! (`ScVal::Symbol` of the field name) in ascending byte order — which
-//! for simple ASCII names is alphabetic. Mis-ordering breaks the on-chain
-//! decode silently (you get `InvalidRound2Payload`), so this module
-//! is the single source of truth for the layout.
+//! Soroban serialises a `#[contracttype]` tuple-variant enum as
+//! `ScVal::Vec(Some([ScVal::Symbol("VariantName"), <inner>]))`. The
+//! inner Round2Payload struct is itself an `ScVal::Map(Vec<ScMapEntry>)`
+//! with entries sorted by key (`ScVal::Symbol` of the field name) in
+//! ascending byte order — alphabetic for ASCII names.
 //!
-//! Field order (alphabetic):
+//! Mis-ordering either layer breaks the on-chain decode silently
+//! (you get `InvalidEnvelope`), so this module is the single source of
+//! truth for the wire format.
+//!
+//! Round2Payload field order (alphabetic):
 //!     asset, computed_at, range_secs, request_id, twap.
 
 use anyhow::{Context, Result};
 use stellar_xdr::curr::{
-    Int128Parts, Limits, ScMap, ScMapEntry, ScSymbol, ScVal, StringM, WriteXdr,
+    Int128Parts, Limits, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec, StringM, VecM, WriteXdr,
 };
 
 pub fn encode_round2(
@@ -33,10 +36,7 @@ pub fn encode_round2(
         .try_into()
         .context("asset symbol too long for ScSymbol (≤32 bytes)")?;
 
-    // Entries MUST stay in alphabetic order — the on-chain decoder is
-    // sort-sensitive. Re-ordering here would only surface as an opaque
-    // `InvalidRound2Payload` error during testnet integration, so we
-    // keep the layout visually obvious.
+    // Inner struct: Round2Payload as ScVal::Map, fields sorted alphabetically.
     let entries = vec![
         ScMapEntry {
             key: symbol_val("asset")?,
@@ -59,16 +59,20 @@ pub fn encode_round2(
             val: ScVal::I128(Int128Parts { hi, lo }),
         },
     ];
-
     let map = ScMap(
         entries
             .try_into()
             .context("ScMap construction (entry count > vec capacity)")?,
     );
+    let inner = ScVal::Map(Some(map));
 
-    ScVal::Map(Some(map))
+    // Wrap in the SubmissionPayload::Round2 variant.
+    let variant: VecM<ScVal> = vec![symbol_val("Round2")?, inner]
+        .try_into()
+        .context("ScVec construction")?;
+    ScVal::Vec(Some(ScVec(variant)))
         .to_xdr(Limits::none())
-        .context("xdr-encode Round2Payload")
+        .context("xdr-encode SubmissionPayload::Round2")
 }
 
 fn symbol_val(s: &str) -> Result<ScVal> {

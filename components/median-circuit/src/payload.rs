@@ -1,17 +1,19 @@
-//! XDR encoder for `FinalPayload` — the bytes the Round 3 circuit feeds
-//! into the host-signed `XlmEnvelope` for `OracleContract::submit_final`.
+//! XDR encoder for `SubmissionPayload::Final(FinalPayload)` — the bytes
+//! the Round 3 circuit feeds into the host-signed `XlmEnvelope` for
+//! `OracleContract::verify_xlm`.
 //!
-//! Soroban serializes a `#[contracttype] struct` as `ScVal::Map` with
-//! entries sorted by key (Symbol of the field name) in ascending byte
-//! order, which for these ASCII identifiers is plain alphabetic. The on-
-//! chain decoder will reject the payload if entry order or any field type
-//! differs from the contract definition. Field order here MUST match
-//! `oracle::FinalPayload`:
+//! Soroban serialises a `#[contracttype]` tuple-variant enum as
+//! `ScVal::Vec(Some([ScVal::Symbol("VariantName"), <inner>]))`. The
+//! inner FinalPayload struct is itself an `ScVal::Map` with entries
+//! sorted by key (Symbol of the field name) in ascending byte order,
+//! which for these ASCII identifiers is plain alphabetic.
+//!
+//! FinalPayload field order MUST match `oracle::FinalPayload`:
 //!   asset, computed_at, median, n_attestations, request_id.
 
 use anyhow::{Context, Result};
 use stellar_xdr::curr::{
-    Int128Parts, Limits, ScMap, ScMapEntry, ScSymbol, ScVal, StringM, WriteXdr,
+    Int128Parts, Limits, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec, StringM, VecM, WriteXdr,
 };
 
 pub fn encode_final(
@@ -24,10 +26,15 @@ pub fn encode_final(
     let hi = (median >> 64) as i64;
     let lo = (median as u128 & u64::MAX as u128) as u64;
 
+    let asset_sym: StringM<32> = asset
+        .as_bytes()
+        .try_into()
+        .context("asset symbol too long for ScSymbol (≤32 bytes)")?;
+
     let entries = vec![
         ScMapEntry {
             key: symbol_val("asset")?,
-            val: symbol_val(asset)?,
+            val: ScVal::Symbol(ScSymbol(asset_sym)),
         },
         ScMapEntry {
             key: symbol_val("computed_at")?,
@@ -46,11 +53,16 @@ pub fn encode_final(
             val: ScVal::U64(request_id),
         },
     ];
-
     let map = ScMap(entries.try_into().context("ScMap construction")?);
-    ScVal::Map(Some(map))
+    let inner = ScVal::Map(Some(map));
+
+    // Wrap in the SubmissionPayload::Final variant.
+    let variant: VecM<ScVal> = vec![symbol_val("Final")?, inner]
+        .try_into()
+        .context("ScVec construction")?;
+    ScVal::Vec(Some(ScVec(variant)))
         .to_xdr(Limits::none())
-        .context("xdr-encode FinalPayload")
+        .context("xdr-encode SubmissionPayload::Final")
 }
 
 fn symbol_val(s: &str) -> Result<ScVal> {
