@@ -4,19 +4,17 @@ use wstd::runtime::block_on;
 
 use crate::host;
 
-/// CoinGecko simple-price endpoint. The host's HTTP allowlist (set in
-/// service.json as `allowed_http_hosts = ["api.coingecko.com"]` for
-/// public, or `["api.coingecko.com", "pro-api.coingecko.com"]` for the
-/// paid tier) MUST authorise the host we're calling or the request is
-/// rejected before it leaves the sandbox.
-const PUBLIC_URL: &str = "https://api.coingecko.com/api/v3/simple/price\
-?ids=bitcoin,ethereum&vs_currencies=usd&include_last_updated_at=true";
-
-/// CoinGecko Demo / Pro endpoint. Used when the workflow's
-/// `coingecko_api_key` config var is set. Demo keys are free at
-/// <https://www.coingecko.com/en/api/pricing> and ~10x the public
-/// rate limit (10–50 req/min → ~500 req/min).
-const PRO_URL: &str = "https://pro-api.coingecko.com/api/v3/simple/price\
+/// CoinGecko simple-price endpoint. Demo keys (free, `CG-…` prefix)
+/// AND no-key callers both hit `api.coingecko.com`; the Demo key just
+/// rides along in the `x-cg-demo-api-key` header to lift the rate
+/// limit from 10–30 req/min/IP to ~30k req/month. Only true Pro keys
+/// (paid, no `CG-` prefix) target the dedicated `pro-api.coingecko.com`
+/// host with `x-cg-pro-api-key` — not what this demo uses.
+///
+/// The host's HTTP allowlist (set in service.json as
+/// `allowed_http_hosts = ["api.coingecko.com"]`) MUST authorise this
+/// host or the request is rejected before it leaves the sandbox.
+const URL: &str = "https://api.coingecko.com/api/v3/simple/price\
 ?ids=bitcoin,ethereum&vs_currencies=usd&include_last_updated_at=true";
 
 /// Fetch the latest BTC/USD and ETH/USD spot prices.
@@ -27,11 +25,7 @@ const PRO_URL: &str = "https://pro-api.coingecko.com/api/v3/simple/price\
 /// key) is recognisable from the node log without external tooling.
 pub fn fetch_now() -> Result<Vec<(&'static str, u64, i128)>> {
     let api_key = host::config_var("coingecko_api_key");
-    let url = match &api_key {
-        Some(_) => PRO_URL,
-        None => PUBLIC_URL,
-    };
-    let body = block_on(async { fetch(url, api_key.as_deref()).await })
+    let body = block_on(async { fetch(URL, api_key.as_deref()).await })
         .context("coingecko GET failed")?;
     let json: serde_json::Value = serde_json::from_slice(&body)
         .with_context(|| format!("coingecko response not JSON: {}", preview(&body)))?;

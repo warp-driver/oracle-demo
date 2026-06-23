@@ -85,15 +85,12 @@ warpdrive-cli service -f "$SERVICE_FILE" workflow trigger \
 warpdrive-cli service -f "$SERVICE_FILE" workflow component \
     --id fetch_prices set-source-digest --digest "$CRON_DIGEST"
 
-# Allow both the free public and Pro/Demo CoinGecko hosts. The cron
-# circuit picks the host based on whether COINGECKO_API_KEY is set in
-# the workflow's component config. Each --http-hosts flag is one
-# host; passing a comma-separated string registers it as one literal
-# hostname (and matches nothing on the wire).
+# Only api.coingecko.com — Demo keys (`CG-…` prefix) ride the public
+# host via the `x-cg-demo-api-key` header; only true Pro keys would
+# use pro-api.coingecko.com (not what this demo supports).
 warpdrive-cli service -f "$SERVICE_FILE" workflow component \
     --id fetch_prices permissions \
-    --http-hosts api.coingecko.com \
-    --http-hosts pro-api.coingecko.com
+    --http-hosts api.coingecko.com
 
 # Optional: thread a CoinGecko Demo / Pro API key from the build env
 # into the component's `coingecko_api_key` config var. Demo keys are
