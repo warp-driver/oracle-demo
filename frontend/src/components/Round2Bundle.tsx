@@ -5,6 +5,7 @@ import {
   formatTwap,
   readQuorum,
   readRound2Bundle,
+  readSignerCount,
   shortHex,
 } from "../lib/oracle";
 
@@ -16,7 +17,11 @@ interface Round2BundleProps {
 }
 
 interface QuorumInfo {
-  total: number;
+  /** Total ed25519 signers registered on the security contract. */
+  signerCount: number;
+  /** The round-2 release threshold the OracleContract applies:
+   *  `ceil(signerCount * numerator / denominator)`. */
+  threshold: number;
 }
 
 export function Round2Bundle({ oracleId, requestId }: Round2BundleProps) {
@@ -24,14 +29,22 @@ export function Round2Bundle({ oracleId, requestId }: Round2BundleProps) {
   const [quorum, setQuorum] = useState<QuorumInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Refresh the quorum denominator once per `(oracleId)` — it's the
-  // total registered signer count, which doesn't change between calls.
+  // Pull the live signer count and the contract's quorum fraction, then
+  // derive the actual round-2 threshold the OracleContract applies
+  // (`ceil(signers * num / denom)`). With one operator at 4/5 the
+  // threshold is 1, NOT 5 — the denominator is a ratio, not a slot
+  // count.
   useEffect(() => {
     if (!oracleId) return;
     let cancelled = false;
-    void readQuorum(oracleId)
-      .then((q) => {
-        if (!cancelled) setQuorum({ total: q.denominator });
+    void Promise.all([readQuorum(oracleId), readSignerCount(oracleId)])
+      .then(([q, signers]) => {
+        if (cancelled) return;
+        const threshold = Math.max(
+          1,
+          Math.ceil((signers * q.numerator) / q.denominator),
+        );
+        setQuorum({ signerCount: signers, threshold });
       })
       .catch(() => {
         // Falls back to "n/?" in the ring — non-fatal.
@@ -84,10 +97,11 @@ export function Round2Bundle({ oracleId, requestId }: Round2BundleProps) {
     );
   }
 
-  const total = quorum?.total ?? Math.max(attestations.length, 5);
-  const filled = Math.min(attestations.length, total);
-  const pct = total > 0 ? Math.round((filled / total) * 100) : 0;
-  const waitingSlots = Math.max(total - attestations.length, 0);
+  const slots = quorum?.signerCount ?? Math.max(attestations.length, 1);
+  const threshold = quorum?.threshold ?? slots;
+  const filled = Math.min(attestations.length, slots);
+  const pct = threshold > 0 ? Math.round((filled / threshold) * 100) : 0;
+  const waitingSlots = Math.max(slots - attestations.length, 0);
 
   return (
     <section className="section">
@@ -97,7 +111,10 @@ export function Round2Bundle({ oracleId, requestId }: Round2BundleProps) {
         </h2>
         <div className="bundle-progress">
           <span>
-            {filled}/{quorum ? total : "?"} attestations
+            {filled}/{threshold} signed
+            {quorum && quorum.signerCount > quorum.threshold
+              ? ` (of ${quorum.signerCount})`
+              : ""}
           </span>
           <span
             className="ring"

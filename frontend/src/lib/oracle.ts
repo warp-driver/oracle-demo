@@ -185,6 +185,31 @@ export async function readQuorum(
   return { numerator: num, denominator: den };
 }
 
+/**
+ * Walk the oracle → verification → security chain to count the
+ * operator pubkeys currently registered. The contract's actual round-2
+ * release threshold is `ceil(signer_count * num / denom)`, NOT the
+ * `denom` itself, so the UI needs this number to render meaningful
+ * progress.
+ */
+export async function readSignerCount(oracleId: string): Promise<number> {
+  const verifAddr = asString(
+    scValToNative(await simulateRead(oracleId, "verification_contract", [])),
+  );
+  if (!verifAddr) throw new Error("verification_contract() returned non-string");
+  const securityAddr = asString(
+    scValToNative(await simulateRead(verifAddr, "security_contract", [])),
+  );
+  if (!securityAddr) throw new Error("security_contract() returned non-string");
+  const signers: unknown = scValToNative(
+    await simulateRead(securityAddr, "list_signers", []),
+  );
+  if (!Array.isArray(signers)) {
+    throw new Error("list_signers() returned non-array");
+  }
+  return signers.length;
+}
+
 // ─── write (request_twap) ────────────────────────────────────────────
 
 export interface RequestTwapResult {
