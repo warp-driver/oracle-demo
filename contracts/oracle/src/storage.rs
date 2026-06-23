@@ -51,6 +51,11 @@ pub struct RequestInfo {
     pub asset: Symbol,
     pub range_secs: u32,
     pub requested_at: u64,
+    /// `None` for native Stellar requests; `Some(eth_address)` for
+    /// requests bridged in from an EVM chain (Sepolia in this demo).
+    /// The address is the Sepolia `msg.sender` that fired the
+    /// `TwapRequested` event the warpdrive bridge circuit observed.
+    pub origin: Option<BytesN<20>>,
 }
 
 // ─── instance ─────────────────────────────────────────────────────────

@@ -116,6 +116,35 @@ pub struct FinalPayload {
     pub computed_at: u64,
 }
 
+/// The XDR payload the `eth-bridge-circuit` emits when it observes a
+/// `TwapRequested(string,uint32,address)` event on Sepolia. Unlike
+/// `Round2Payload`/`FinalPayload` this carries no `request_id`: the
+/// contract mints a fresh one on accept, so the bridged request joins
+/// the same Round-2/3 pipeline as a Stellar-native `request_twap` call.
+///
+/// Field order, types, and `Option` wrapping are LOCKED — both the
+/// bridge circuit (XDR-encodes this on the host side) and the
+/// frontend (filters `twapreq` events by `originator`) depend on the
+/// byte-for-byte layout.
+#[contracttype]
+#[derive(Clone)]
+pub struct BridgeTriggerPayload {
+    pub asset: Symbol,
+    pub range_secs: u32,
+    /// `msg.sender` from the Sepolia `TwapRequested` event — the
+    /// MetaMask wallet that paid Sepolia gas for the original
+    /// trigger.
+    pub eth_origin: BytesN<20>,
+    /// Sepolia transaction hash, used by the host as the
+    /// `event_id_salt` so both operators collapse to the same
+    /// `event_id` and the contract dedups replays via
+    /// `is_event_seen`.
+    pub eth_tx_hash: BytesN<32>,
+    /// `log.block_timestamp` from Sepolia — deterministic across
+    /// operators, so it can't drift between the two witnesses.
+    pub block_timestamp: u64,
+}
+
 /// Discriminated payload the off-chain Vectrs put inside the signed
 /// envelope. The warpdrive node's submission manager always invokes
 /// `verify_xlm` on the handler — there is no per-round entrypoint to
@@ -129,6 +158,11 @@ pub enum SubmissionPayload {
     /// Quorum-signed Round 3 attestation: the median of the Round 2
     /// bundle.
     Final(FinalPayload),
+    /// Quorum-signed observation of a `TwapRequested` event on the
+    /// configured EVM chain — both operators must agree they saw the
+    /// same Sepolia log before the contract mints a fresh request_id
+    /// and emits the usual `twapreq` Soroban event.
+    BridgeTrigger(BridgeTriggerPayload),
 }
 
 /// One Vectr's Round 2 contribution as recorded on chain — what's bundled
@@ -197,6 +231,8 @@ impl OracleContract {
             asset: asset.clone(),
             range_secs,
             requested_at: now,
+            // Stellar-native path: no EVM origin to record.
+            origin: None,
         };
         storage::save_request(&env, id, &info);
         storage::extend_instance_ttl(&env);
@@ -207,6 +243,7 @@ impl OracleContract {
                 asset,
                 range_secs,
                 requested_at: now,
+                originator: None,
             },
         );
         id
@@ -300,6 +337,26 @@ impl OracleContract {
                     Err(Err(_)) => return Err(OracleError::OtherInvocationError),
                 }
                 Self::apply_final(&env, &event_id, p)
+            }
+            SubmissionPayload::BridgeTrigger(p) => {
+                // Full quorum: both operators must independently witness
+                // the same Sepolia `TwapRequested` log and produce
+                // identical `BridgeTriggerPayload` bytes, so the host
+                // quorum-collapses their signatures into one envelope.
+                // `try_verify` enforces sum-of-weights ≥ required at
+                // the reference_block, same as the `Final` arm.
+                match verification.try_verify(
+                    &envelope_bytes,
+                    &sig_data.signatures,
+                    &sig_data.signers,
+                    &sig_data.reference_block,
+                ) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => return Err(OracleError::UnknownVerificationError),
+                    Err(Ok(e)) => return Err(OracleError::from(e)),
+                    Err(Err(_)) => return Err(OracleError::OtherInvocationError),
+                }
+                Self::apply_bridge_trigger(&env, &event_id, p)
             }
         }
     }
@@ -407,6 +464,42 @@ impl OracleContract {
         Ok(())
     }
 
+    // ── internal bridge trigger logic ─────────────────────────────────
+
+    /// Mints a fresh request_id for an EVM-bridged `TwapRequested` event,
+    /// persists it with the originating wallet attached, and emits the
+    /// same `twapreq` Soroban event the Stellar-native `request_twap`
+    /// would have — so Round 2/3 circuits are oblivious to which side
+    /// of the bridge the request came from.
+    fn apply_bridge_trigger(
+        env: &Env,
+        event_id: &BytesN<20>,
+        payload: BridgeTriggerPayload,
+    ) -> Result<(), OracleError> {
+        let id = storage::next_request_id(env);
+        let now = env.ledger().timestamp();
+        let info = RequestInfo {
+            asset: payload.asset.clone(),
+            range_secs: payload.range_secs,
+            requested_at: now,
+            origin: Some(payload.eth_origin.clone()),
+        };
+        storage::save_request(env, id, &info);
+        storage::mark_event_seen(env, event_id);
+        storage::extend_instance_ttl(env);
+
+        env.events().publish(
+            (symbol_short!("twapreq"), id),
+            TwapRequestData {
+                asset: payload.asset,
+                range_secs: payload.range_secs,
+                requested_at: now,
+                originator: Some(payload.eth_origin),
+            },
+        );
+        Ok(())
+    }
+
     // ── reads ─────────────────────────────────────────────────────────
 
     pub fn verification_contract(env: Env) -> Address {
@@ -454,6 +547,11 @@ pub struct TwapRequestData {
     pub asset: Symbol,
     pub range_secs: u32,
     pub requested_at: u64,
+    /// `None` for Stellar-native requests; `Some(eth_address)` for
+    /// requests bridged from Sepolia — the MetaMask `msg.sender` that
+    /// fired the `TwapRequested` log. The frontend filters this field
+    /// to associate Round 2/Final events with the wallet that asked.
+    pub originator: Option<BytesN<20>>,
 }
 
 /// Data field of the `Round2Ready` composition event.
