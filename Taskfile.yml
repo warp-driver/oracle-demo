@@ -356,12 +356,14 @@ tasks:
   register-signer:
     desc: |
       Register the operator's ed25519 pubkey on the on-chain security
-      contract and set the consensus threshold. Auto-fetches the pubkey
-      from the running node (`fetch-signer`) unless out/signer.pubkey
-      already exists. Routes through project_root for the same reason
-      `task set-threshold` does.
+      contract and set the consensus threshold. Always refetches the
+      pubkey from the running node — the warpdrive node derives a fresh
+      signing key each time the service registration changes, so a
+      stale out/signer.pubkey would silently leave the on-chain set
+      pointing at a key the node no longer uses. Routes through
+      project_root for the same reason `task set-threshold` does.
     cmds:
-      - test -s out/signer.pubkey || task fetch-signer
+      - task: fetch-signer
       - |
         set -euo pipefail
         SIGNER_PUBKEY=$(cat out/signer.pubkey)
