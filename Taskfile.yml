@@ -360,13 +360,36 @@ tasks:
       pubkey from the running node — the warpdrive node derives a fresh
       signing key each time the service registration changes, so a
       stale out/signer.pubkey would silently leave the on-chain set
-      pointing at a key the node no longer uses. Routes through
-      project_root for the same reason `task set-threshold` does.
+      pointing at a key the node no longer uses. Before adding the
+      current key we drop any previously-registered key that isn't it;
+      otherwise stale keys accumulate (each service-registration cycle
+      rotates the signer) and inflate total_weight past what one
+      signature can cover, so try_verify rejects with #303
+      InsufficientWeight even though the only live operator did sign.
+      Routes through project_root for the same reason
+      `task set-threshold` does.
     cmds:
       - task: fetch-signer
       - |
         set -euo pipefail
         SIGNER_PUBKEY=$(cat out/signer.pubkey)
+        SECURITY=$(jq -r .contracts.ed25519_security out/deploy.json)
+        # Drop every signer currently on the security contract that
+        # isn't the one the node will sign with going forward.
+        for STALE in $(stellar contract invoke \
+                --id "$SECURITY" \
+                --rpc-url "{{.RPC_URL}}" \
+                --network-passphrase "{{.NETWORK_PASSPHRASE}}" \
+                --source "$DEPLOYER_SECRET" \
+                -- list_signers \
+            | jq -r --arg cur "$SIGNER_PUBKEY" '.[] | select(.key != $cur) | .key'); do
+            echo "removing stale signer $STALE"
+            scripts/middleware.sh remove-signer \
+                --scheme ed25519 \
+                --key "$STALE" \
+                --deploy-file /out/deploy.json \
+                --via-project-root
+        done
         scripts/middleware.sh add-signer \
             --scheme ed25519 \
             --key "$SIGNER_PUBKEY" \
