@@ -18,7 +18,7 @@ set -a; source .env; set +a
 # ----- 2. Phase 1: build everything + deploy on-chain contracts -----
 task deploy
 # -> out/deploy.json    (ed25519_security, ed25519_verification, project_root)
-# -> out/oracle.json    (the handler contract)
+# -> out/oracle.json    (the handler contract, default quorum 4/5)
 # Also runs register_handler on project_root.
 
 # ----- 3. Start the warpdrive node in another terminal -----
@@ -34,27 +34,37 @@ task wire-service
 # -> out/service.hash
 # Node log: "Initializing dispatcher: services=1, workflows=3, components=4"
 
-# ----- 5. Register operator pubkey + set 1/1 threshold on the security contract -----
+# ----- 5. Register the operator's pubkey + threshold (default 1/1) -----
 task register-signer
-# -> out/signer.json, out/signer.pubkey
+# Drops stale signers from previous service-registration cycles, fetches
+# the current node's pubkey, adds it at weight SIGNER_WEIGHT (default 100),
+# sets THRESHOLD_NUM/THRESHOLD_DEN (default 1/1).
 
 # ----- 6. Hand the oracle contract id to the frontend, then run the UI -----
 task frontend-config
 task frontend-dev    # http://localhost:5173
 
 # Done. The node is now:
-# - polling CoinGecko every 10 min (fetch_prices workflow)
+# - polling CoinGecko every 30s (fetch_prices workflow; CRON_SCHEDULE override)
 # - watching OracleContract for "twapreq" events (compute_twap workflow)
 # - watching OracleContract for "r2ready" events (compute_median workflow)
 #
-# Use the UI to call request_twap(asset, range_secs); within seconds you
-# should see a Round2Ready, then a Finalized event from the same contract.
+# Use the UI to call request_twap(asset, range_secs); within ~10–20 s
+# you should see Round2Ready, then Finalized.
 
 # ----- Verify final TWAP for a request id manually -----
-# REQUEST_ID=42
+# REQUEST_ID=0
 # ORACLE=$(jq -r .oracle out/oracle.json)
 # stellar contract invoke --id "$ORACLE" \
 #   --rpc-url https://soroban-testnet.stellar.org \
 #   --network-passphrase "Test SDF Network ; September 2015" \
 #   --source "$DEPLOYER_SECRET" \
 #   -- final_twap --request_id "$REQUEST_ID"
+
+# ----- Multi-operator (see README → "Multi-operator deployment") -----
+# Two recipes: same-host N nodes for screenshots, multi-host for prod.
+# Key invariant: deploy QUORUM_NUM/QUORUM_DEN on the oracle AND
+# THRESHOLD_NUM/THRESHOLD_DEN on the security contract together.
+# E.g. 5 operators at 4-of-5:
+#   QUORUM_NUM=4 QUORUM_DEN=5 task deploy-oracle
+#   THRESHOLD_NUM=4 THRESHOLD_DEN=5 task set-threshold

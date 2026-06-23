@@ -16,8 +16,8 @@ small, standalone, and reads top-to-bottom in one sitting.
               ┌──────────────────────────────────────────────────────┐
               │                                                      │
    (cron)  ──▶ │ 1. fetch_prices  ─ cron-circuit                      │
-              │    every 10 min, GET api.coingecko.com,              │
-              │    write {btc,eth} samples to wasi:keyvalue          │
+              │    default 30 s (demo), Submit::None.                │
+              │    GET api.coingecko.com → wasi:keyvalue samples     │
               │                                                      │
    user ───▶  ┌──────────────────────────────────────────────────────┐
    request   │ 2. OracleContract.request_twap(asset, range_secs)     │
@@ -28,21 +28,22 @@ small, standalone, and reads top-to-bottom in one sitting.
    (stellar event) ──▶ ┌──────────────────────────────────────────────┐
                        │ 3. compute_twap ─ twap-circuit                │
                        │    geo-mean of samples in [now − range, now], │
-                       │    emits XDR Round2Payload, submitted by      │
-                       │    the shared aggregator as a single-signer   │
-                       │    `submit_round2` tx to OracleContract       │
+                       │    emits XDR SubmissionPayload::Round2,       │
+                       │    submitted by the shared aggregator as a    │
+                       │    `verify_xlm` tx to OracleContract          │
                        └──────────────────────────────────────────────┘
                                   │
-                       once ≥ quorum operators have submitted:
+                       once ≥ threshold operators have submitted:
                        OracleContract emits `Round2Ready`
                        (topic[0]=symbol "r2ready", topic[1]=request_id)
                                   │
    (stellar event) ──▶ ┌──────────────────────────────────────────────┐
                        │ 4. compute_median ─ median-circuit            │
                        │    deterministic median across the bundle's   │
-                       │    attestations; emits XDR FinalPayload,      │
-                       │    submitted via the shared aggregator as a   │
-                       │    quorum-signed `submit_final` tx            │
+                       │    attestations; emits XDR                    │
+                       │    SubmissionPayload::Final, submitted via    │
+                       │    the shared aggregator as a quorum-signed   │
+                       │    `verify_xlm` tx                            │
                        └──────────────────────────────────────────────┘
                                   │
                        OracleContract.final_twap(id) → Option<i128>
@@ -158,31 +159,157 @@ oracle-demo/
 
 ## Multi-operator deployment
 
-Out of scope for the quickstart but supported end-to-end. The pattern
-is:
+The quickstart runs one operator at 1/1 threshold. The whole point of
+the architecture is N operators independently fetching CoinGecko,
+computing TWAPs, and converging on a quorum-signed median. Two ways
+to demo that.
 
-1. Edit `warpdrive.toml`: replace `[warpdrive.p2p.local]` with the
-   `[warpdrive.p2p.remote]` template at the bottom. Operator 1 leaves
-   `bootstrap_nodes = []`; operators 2 and 3 list operator 1's multiaddr.
-2. Every operator runs `task deploy` against the **same** project_root
-   (only operator 1 actually deploys; the others just need the same
-   `out/deploy.json` + `out/oracle.json` copied in).
-3. Every operator runs `task run-node` and `task register-signer` once.
-   The Taskfile's `register-signer` posts that operator's pubkey to
-   the on-chain security contract.
-4. Operator 1 pins service.json to IPFS: `PINATA_JWT=... task
-   publish-service`. The other nodes pick it up via
-   `project_root.service_uri()` on their next chain poll. (Get a Pinata
-   JWT at https://app.pinata.cloud > API Keys, permission
-   `pinFileToIPFS`.)
-5. Adjust threshold once you know how many signers are registered:
-   `THRESHOLD_NUM=2 THRESHOLD_DEN=3 task set-threshold`.
+### Two key numbers
 
-The on-chain quorum (default 4/5 of registered signers, set at oracle
-deploy time via `QUORUM_NUM` / `QUORUM_DEN`) is independent of the
-verification contract threshold. Set them together — for 3-operator the
-typical setup is `QUORUM_NUM=2 QUORUM_DEN=3 task deploy-oracle` and
-`THRESHOLD_NUM=2 THRESHOLD_DEN=3 task register-signer`.
+The contract holds **two distinct fractions**. Set them together or
+round-2 silently never releases:
+
+| Knob | Where it lives | What it means |
+|---|---|---|
+| `QUORUM_NUM / QUORUM_DEN` | OracleContract constructor (default 4/5) | Round-2 release threshold = `ceil(signer_count × num / denom)`. Once that many per-Vectr attestations land, the contract emits `Round2Ready`. |
+| `THRESHOLD_NUM / THRESHOLD_DEN` | ed25519-security contract (default 1/1) | Verification threshold. The aggregator must collect signatures whose summed weight ≥ `total_weight × num / denom` for `verify_xlm` to accept a submission. |
+
+For a 5-operator 4-of-5 setup: `QUORUM_NUM=4 QUORUM_DEN=5 task
+deploy-oracle` (Round 2 needs 4 of 5 single-sig attestations on chain)
+AND `THRESHOLD_NUM=4 THRESHOLD_DEN=5 task set-threshold` (Round 3
+`verify_xlm` accepts only a 4-of-5 quorum-signed envelope).
+
+### Same-host: N operators on one machine
+
+Smallest possible multi-op setup — useful for screenshotting `4/5
+signed` without renting hardware. Each operator gets its own
+`WARPDRIVE_HOME`, its own port, its own signing mnemonic; they
+discover each other over mDNS on the same loopback.
+
+```bash
+cd ~/work/warpdrive/oracle-demo
+set -a; source .env; set +a   # uses the existing DEPLOYER_SECRET
+
+# 1. Re-deploy the oracle with a 4/5 release threshold.
+QUORUM_NUM=4 QUORUM_DEN=5 task deploy-oracle
+task register-handler
+task frontend-config
+
+# 2. Spin up 4 more nodes. Each gets its own home dir, port, mnemonic.
+for i in 2 3 4 5; do
+    mkdir -p out/op-$i
+    cp warpdrive.toml out/op-$i/
+    # Each node needs a unique [warpdrive] port + p2p listen_port; the
+    # shipped warpdrive.toml lives at port 8000 / 9000. Bump by 10 per
+    # operator so 1=8000+9000, 2=8010+9010, ...
+    sed -i "s/^port = 8000/port = $((8000 + (i-1)*10))/" out/op-$i/warpdrive.toml
+    sed -i "s/^listen_port = 9000/listen_port = $((9000 + (i-1)*10))/" out/op-$i/warpdrive.toml
+    MNEMONIC=$(stellar keys generate "oracle-op-$i" --no-fund && \
+               stellar keys show "oracle-op-$i" --phrase)
+    cat > out/op-$i/.env <<EOF
+DEPLOYER_SECRET=$DEPLOYER_SECRET
+DEPLOYER_ADDRESS=$DEPLOYER_ADDRESS
+WARPDRIVE_SIGNING_MNEMONIC="$MNEMONIC"
+EOF
+done
+
+# 3. In FIVE separate terminals — one per operator — start a node.
+# Terminal 1 (the one you already had running):
+#     set -a; source .env; set +a; task run-node
+# Terminals 2..5:
+#     cd ~/work/warpdrive/oracle-demo
+#     set -a; source out/op-N/.env; set +a
+#     WARPDRIVE_HOME=out/op-N WARPDRIVE_DATA=out/op-N/data \
+#         warpdrive --home out/op-N --port $((8000 + (N-1)*10))
+# (replace N with 2, 3, 4, 5)
+
+# 4. Back in terminal 1 — register each operator's pubkey on the
+#    security contract. The register-signer task always reads the
+#    LOCAL node's pubkey (port 8000), so we override the endpoint per
+#    operator. Wait ~3 s between calls so testnet sees each tx land.
+for i in 1 2 3 4 5; do
+    PORT=$((8000 + (i-1)*10))
+    WARPDRIVE_ENDPOINT="http://127.0.0.1:$PORT" task fetch-signer
+    scripts/middleware.sh add-signer \
+        --scheme ed25519 \
+        --key "$(cat out/signer.pubkey)" \
+        --weight 100 \
+        --deploy-file /out/deploy.json \
+        --via-project-root
+    sleep 3
+done
+
+# 5. Set the verification threshold to 4/5.
+THRESHOLD_NUM=4 THRESHOLD_DEN=5 task set-threshold
+
+# 6. Each operator picks up service.json via the dispatcher. The
+#    simplest path: pin once and let project_root point at it. The
+#    other nodes poll project_root.service_uri() on their next chain
+#    poll and self-register.
+PINATA_JWT=... task publish-service
+# (Get a free JWT at https://app.pinata.cloud → API Keys, scope
+# pinFileToIPFS.)
+
+# 7. Hit the UI. A single request_twap now fans out to all 5 nodes;
+#    the Round 2 bundle on chain fills to 4 signers, OracleContract
+#    emits Round2Ready, all 5 median circuits agree on the median, the
+#    aggregator collects 4 sigs of weight 100 each (= 400 ≥ required
+#    400), submits one verify_xlm with the quorum-signed envelope, and
+#    Finalized lands. End to end < 60 s on testnet.
+```
+
+Cleanup: `for i in 2 3 4 5; do stellar keys rm oracle-op-$i; done && rm -rf out/op-{2,3,4,5}`.
+
+### Multi-host: one box per operator
+
+The pattern that ships to production. Each operator runs the repo on
+their own server.
+
+1. Operator 1 (the bootstrap node) runs the regular **single-operator
+   quickstart** all the way through `task wire-service` so on-chain
+   contracts exist and a service spec is registered with operator 1's
+   dispatcher.
+2. Operator 1 pins service.json to IPFS and points project_root at it:
+   ```bash
+   PINATA_JWT=... task publish-service
+   ```
+   (Get a free Pinata JWT at https://app.pinata.cloud → API Keys,
+   permission `pinFileToIPFS`.)
+3. Operators 2…N each clone the repo, copy operator 1's
+   `out/deploy.json` + `out/oracle.json` into their `out/` (they need
+   the contract addresses, not the keys), and edit
+   `warpdrive.toml`:
+   ```toml
+   [warpdrive.p2p.remote]
+   listen_port = 9000
+   bootstrap_nodes = [
+       "/ip4/<operator-1-public-ip>/tcp/9000/p2p/<operator-1-peer-id>",
+   ]
+   ```
+   The peer_id is in operator 1's log: search for `peer_id: 12D3KooW…`.
+4. Each operator 2…N runs:
+   ```bash
+   ./scripts/bootstrap-keys.sh > .env   # mints THIS operator's mnemonic
+   set -a; source .env; set +a
+   task fetch-wit
+   task run-node                        # in another terminal
+   task register-signer                 # adds this node's pubkey on chain
+   ```
+   They do NOT run `task deploy` — the contracts already exist.
+   `register-service` is also skipped because every node fetches the
+   spec from project_root.service_uri() automatically.
+5. Once all N operators have registered their signers, operator 1
+   raises the threshold to match:
+   ```bash
+   THRESHOLD_NUM=4 THRESHOLD_DEN=5 task set-threshold
+   ```
+   and re-deploys the oracle with the matching release ratio if
+   needed:
+   ```bash
+   QUORUM_NUM=4 QUORUM_DEN=5 task deploy-oracle
+   task register-handler
+   task publish-service                 # the new oracle id changes service.json
+   ```
 
 ## Troubleshooting
 
