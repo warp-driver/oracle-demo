@@ -1,0 +1,518 @@
+version: '3'
+
+# Environment variables consumed by deploy tasks (export in your shell or via .env):
+#
+#   DEPLOYER_SECRET                 Funded testnet S-seed. Used as `--source` for every
+#                                   on-chain deploy/invoke AND as BYOK secret for the
+#                                   middleware container. Bootstrap:
+#                                     stellar keys generate oracle-deployer --fund --network testnet
+#                                     export DEPLOYER_SECRET=$(stellar keys show oracle-deployer)
+#                                     export DEPLOYER_ADDRESS=$(stellar keys address oracle-deployer)
+#   DEPLOYER_ADDRESS                G-address matching DEPLOYER_SECRET. Required by middleware.
+#   WARPDRIVE_SIGNING_MNEMONIC      BIP39 mnemonic the node HD-derives the operator's
+#                                   ed25519 signing key from. MUST be BIP39 — a raw
+#                                   hex secret won't satisfy non-zero HD indices.
+#                                   Bootstrap:
+#                                     stellar keys generate warpdrive-operator
+#                                     export WARPDRIVE_SIGNING_MNEMONIC="$(stellar keys show warpdrive-operator --phrase)"
+#   RPC_URL                         Stellar Soroban RPC. Default: testnet.
+#   NETWORK_PASSPHRASE              Stellar network passphrase. Default: testnet.
+#   TRIGGER_CHAIN                   WarpDrive chain key the Stellar-event triggers watch.
+#                                   Default: stellar:testnet (the OracleContract lives there).
+#   MANAGER_CHAIN                   WarpDrive chain key the project_root + handler are on.
+#                                   Default: stellar:testnet.
+#   QUORUM_NUM/QUORUM_DEN           Oracle quorum fraction for round-2 release. Default 4/5.
+#   SIGNER_WEIGHT                   Operator weight on the security contract. Default: 100.
+#   THRESHOLD_NUM/THRESHOLD_DEN     Consensus threshold fraction on the ed25519-security
+#                                   contract (round-3 verifier). Default: 1/1 (single op).
+#   PINATA_JWT                      Pinata JWT for `task pin-service` (multi-operator deploys
+#                                   pin service.json to public IPFS so all nodes can fetch via
+#                                   project_root.service_uri()). Generate at
+#                                   https://app.pinata.cloud > API Keys.
+#
+# Artefacts produced under ./out/ (gitignored):
+#
+#   out/deploy.json        Middleware-produced manifest: ed25519_security,
+#                          ed25519_verification, project_root.
+#   out/oracle.json        Oracle handler contract address.
+#   out/cron.digest        Content-address digest of the uploaded cron-circuit component.
+#   out/twap.digest        Content-address digest of the uploaded twap-circuit component.
+#   out/median.digest      Content-address digest of the uploaded median-circuit component.
+#   out/aggregator.digest  Content-address digest of the uploaded aggregator component.
+#   out/service.hash       Hash returned by POST /dev/services after registering service.json.
+#   out/service.cid        IPFS CID returned by `task pin-service` (multi-operator deploys).
+#   out/signer.json        Raw SignerResponse from POST /services/signer.
+#   out/signer.pubkey      32-byte ed25519 pubkey extracted from signer.json.
+
+vars:
+  RPC_URL: '{{.RPC_URL | default "https://soroban-testnet.stellar.org"}}'
+  NETWORK_PASSPHRASE: '{{.NETWORK_PASSPHRASE | default "Test SDF Network ; September 2015"}}'
+  TRIGGER_CHAIN: '{{.TRIGGER_CHAIN | default "stellar:testnet"}}'
+  MANAGER_CHAIN: '{{.MANAGER_CHAIN | default "stellar:testnet"}}'
+  QUORUM_NUM: '{{.QUORUM_NUM | default "4"}}'
+  QUORUM_DEN: '{{.QUORUM_DEN | default "5"}}'
+  SIGNER_WEIGHT: '{{.SIGNER_WEIGHT | default "100"}}'
+  THRESHOLD_NUM: '{{.THRESHOLD_NUM | default "1"}}'
+  THRESHOLD_DEN: '{{.THRESHOLD_DEN | default "1"}}'
+  MIDDLEWARE_IMAGE: '{{.MIDDLEWARE_IMAGE | default "ghcr.io/warp-driver/warpdrive-stellar-middleware:latest"}}'
+  CRON_WASM: components/cron-circuit/target/wasm32-wasip1/release/cron_circuit.wasm
+  TWAP_WASM: components/twap-circuit/target/wasm32-wasip1/release/twap_circuit.wasm
+  MEDIAN_WASM: components/median-circuit/target/wasm32-wasip1/release/median_circuit.wasm
+  AGGREGATOR_WASM: components/aggregator/target/wasm32-wasip1/release/oracle_aggregator.wasm
+  SERVICE_FILE: '{{.SERVICE_FILE | default "service/service.json"}}'
+
+tasks:
+  fetch-wit:
+    desc: Fetch warpdrive WIT dependencies into wit-definitions/deps/.
+    cmds:
+      - cd wit-definitions && wkg wit fetch
+
+  # ── component builds ──────────────────────────────────────────────────
+
+  build-cron-circuit:
+    desc: Build cron-circuit (round 1 — fetches CoinGecko prices) as a WASI 0.2 component.
+    cmds:
+      - cargo component build --release --manifest-path components/cron-circuit/Cargo.toml
+
+  build-twap-circuit:
+    desc: Build twap-circuit (round 2 — emits Round2Payload TWAP) as a WASI 0.2 component.
+    cmds:
+      - cargo component build --release --manifest-path components/twap-circuit/Cargo.toml
+
+  build-median-circuit:
+    desc: Build median-circuit (round 3 — emits FinalPayload median) as a WASI 0.2 component.
+    cmds:
+      - cargo component build --release --manifest-path components/median-circuit/Cargo.toml
+
+  build-aggregator:
+    desc: Build oracle-aggregator (shared submitter for round 2 + round 3) as a WASI 0.2 component.
+    cmds:
+      - cargo component build --release --manifest-path components/aggregator/Cargo.toml
+
+  build-components:
+    desc: Build all four WASI components (cron + twap + median + aggregator).
+    deps: [build-cron-circuit, build-twap-circuit, build-median-circuit, build-aggregator]
+
+  # ── contract builds ───────────────────────────────────────────────────
+
+  build-security:
+    desc: Build ed25519-security Soroban contract.
+    cmds:
+      - cd contracts/ed25519-security && stellar contract build --optimize
+
+  build-verification:
+    desc: Build ed25519-verification Soroban contract.
+    cmds:
+      - cd contracts/ed25519-verification && stellar contract build --optimize
+
+  build-oracle:
+    desc: Build oracle Soroban contract (the handler).
+    cmds:
+      - cd contracts/oracle && stellar contract build --optimize
+
+  build-contracts:
+    desc: Build all three Soroban contracts (security + verification + oracle).
+    deps: [build-security, build-verification, build-oracle]
+
+  # ── on-chain deploys ──────────────────────────────────────────────────
+
+  deploy-middleware:
+    desc: |
+      Deploy ed25519 pipeline + project-root via warpdrive-stellar-middleware
+      using your DEPLOYER_SECRET (BYOK). Writes out/deploy.json with
+      ed25519_security, ed25519_verification, project_root addresses.
+    cmds:
+      - mkdir -p out
+      - |
+        set -euo pipefail
+        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
+        : "${DEPLOYER_ADDRESS:?DEPLOYER_ADDRESS is required}"
+        docker run --rm \
+          --pull=always \
+          --user "$(id -u):$(id -g)" \
+          -e HOME=/tmp \
+          -e RPC_URL="{{.RPC_URL}}" \
+          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
+          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
+          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
+          -v "$PWD/out:/out" \
+          {{.MIDDLEWARE_IMAGE}} \
+          /warpdrive/cli.sh deploy --output-path /out/deploy.json --variant stellar
+
+  deploy-oracle:
+    desc: |
+      Deploy the oracle handler using DEPLOYER_SECRET. Reads the
+      verification contract from out/deploy.json. Writes out/oracle.json.
+      Quorum defaults to {{.QUORUM_NUM}}/{{.QUORUM_DEN}} (override via env).
+    deps: [build-oracle]
+    cmds:
+      - mkdir -p out
+      - |
+        set -euo pipefail
+        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
+        VERIFICATION=$(jq -r .contracts.ed25519_verification out/deploy.json)
+        test -n "$VERIFICATION" && test "$VERIFICATION" != "null" \
+            || { echo "out/deploy.json missing .contracts.ed25519_verification — run task deploy-middleware first"; exit 1; }
+        ORACLE_ADDR=$(stellar contract deploy \
+            --wasm contracts/oracle/target/wasm32v1-none/release/oracle.wasm \
+            --rpc-url "{{.RPC_URL}}" \
+            --network-passphrase "{{.NETWORK_PASSPHRASE}}" \
+            --source "$DEPLOYER_SECRET" \
+            -- \
+            --verification_contract "$VERIFICATION" \
+            --quorum_numerator {{.QUORUM_NUM}} \
+            --quorum_denominator {{.QUORUM_DEN}})
+        echo "{\"oracle\":\"$ORACLE_ADDR\"}" | jq . > out/oracle.json
+        cat out/oracle.json
+
+  register-handler:
+    desc: |
+      Register the oracle handler on the on-chain project_root so its
+      events and submissions are tracked. Admin-only — must be invoked
+      with DEPLOYER_SECRET (the deployer is project_root's admin).
+    cmds:
+      - |
+        set -euo pipefail
+        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
+        PROJECT_ROOT=$(jq -r .contracts.project_root out/deploy.json)
+        ORACLE=$(jq -r .oracle out/oracle.json)
+        test -n "$PROJECT_ROOT" && test "$PROJECT_ROOT" != "null" \
+            || { echo "out/deploy.json missing .contracts.project_root"; exit 1; }
+        test -n "$ORACLE" && test "$ORACLE" != "null" \
+            || { echo "out/oracle.json missing .oracle — run task deploy-oracle first"; exit 1; }
+        stellar contract invoke \
+            --id "$PROJECT_ROOT" \
+            --rpc-url "{{.RPC_URL}}" \
+            --network-passphrase "{{.NETWORK_PASSPHRASE}}" \
+            --source "$DEPLOYER_SECRET" \
+            -- \
+            register_handler \
+            --handler "$ORACLE"
+        echo "registered oracle $ORACLE on project_root $PROJECT_ROOT"
+
+  # ── component uploads ─────────────────────────────────────────────────
+
+  upload-cron:
+    desc: Upload cron-circuit wasm; writes digest to out/cron.digest.
+    deps: [build-cron-circuit]
+    cmds:
+      - mkdir -p out
+      - warpdrive-cli upload-component {{.CRON_WASM}} 2>&1 | tee out/cron.upload.log
+      - |
+        grep -Eo '^[a-f0-9]{64}$' out/cron.upload.log | tail -n 1 > out/cron.digest
+        test -s out/cron.digest || { echo "no digest captured from upload-component output"; exit 1; }
+
+  upload-twap:
+    desc: Upload twap-circuit wasm; writes digest to out/twap.digest.
+    deps: [build-twap-circuit]
+    cmds:
+      - mkdir -p out
+      - warpdrive-cli upload-component {{.TWAP_WASM}} 2>&1 | tee out/twap.upload.log
+      - |
+        grep -Eo '^[a-f0-9]{64}$' out/twap.upload.log | tail -n 1 > out/twap.digest
+        test -s out/twap.digest || { echo "no digest captured from upload-component output"; exit 1; }
+
+  upload-median:
+    desc: Upload median-circuit wasm; writes digest to out/median.digest.
+    deps: [build-median-circuit]
+    cmds:
+      - mkdir -p out
+      - warpdrive-cli upload-component {{.MEDIAN_WASM}} 2>&1 | tee out/median.upload.log
+      - |
+        grep -Eo '^[a-f0-9]{64}$' out/median.upload.log | tail -n 1 > out/median.digest
+        test -s out/median.digest || { echo "no digest captured from upload-component output"; exit 1; }
+
+  upload-aggregator:
+    desc: Upload oracle-aggregator wasm; writes digest to out/aggregator.digest.
+    deps: [build-aggregator]
+    cmds:
+      - mkdir -p out
+      - warpdrive-cli upload-component {{.AGGREGATOR_WASM}} 2>&1 | tee out/aggregator.upload.log
+      - |
+        grep -Eo '^[a-f0-9]{64}$' out/aggregator.upload.log | tail -n 1 > out/aggregator.digest
+        test -s out/aggregator.digest || { echo "no digest captured from upload-component output"; exit 1; }
+
+  # ── service.json + node registration ──────────────────────────────────
+
+  build-service:
+    desc: |
+      Build service.json declaratively via warpdrive-cli with all three
+      workflows (fetch_prices → compute_twap → compute_median).
+      Requires out/oracle.json, out/deploy.json, and the four
+      out/*.digest files (run `task wire-service` to do the full chain).
+    cmds:
+      - mkdir -p service
+      - rm -f {{.SERVICE_FILE}}
+      - >-
+        SERVICE_FILE={{.SERVICE_FILE}}
+        TRIGGER_CHAIN={{.TRIGGER_CHAIN}}
+        MANAGER_CHAIN={{.MANAGER_CHAIN}}
+        ./scripts/build-service.sh
+
+  register-service:
+    desc: |
+      Register service/service.json with the local warpdrive node via
+      /dev/services. Saves the service hash to out/service.hash and
+      activates the service in the dispatcher.
+    cmds:
+      - mkdir -p out
+      - |
+        set -euo pipefail
+        HASH=$(curl -sS -X POST http://127.0.0.1:8000/dev/services \
+            -H "Content-Type: application/json" \
+            --data @{{.SERVICE_FILE}} | jq -r .hash)
+        test -n "$HASH" && test "$HASH" != "null" \
+            || { echo "no hash returned from /dev/services"; exit 1; }
+        echo "$HASH" > out/service.hash
+        echo "service hash: $HASH"
+        curl -sSf -X POST "http://127.0.0.1:8000/dev/services/$HASH" \
+            -o /dev/null
+        echo "service registered with dispatcher"
+
+  register-manager:
+    desc: |
+      Tell the local warpdrive node to start watching the on-chain
+      project_root from out/deploy.json. The node fetches the current
+      service spec from project_root.service_uri() (typically the IPFS
+      CID set via `task publish-service`), pulls it from the configured
+      ipfs_gateway, and registers it in its dispatcher. Run once per
+      operator after `task run-node` for multi-operator deploys.
+    cmds:
+      - |
+        set -euo pipefail
+        PROJECT_ROOT=$(jq -r .contracts.project_root out/deploy.json)
+        BODY=$(jq -nc --arg chain "{{.MANAGER_CHAIN}}" --arg addr "$PROJECT_ROOT" \
+            '{service_manager: {stellar: {chain: $chain, address: $addr}}}')
+        curl -sSf -X POST http://127.0.0.1:8000/services \
+            -H "Content-Type: application/json" \
+            --data "$BODY" \
+            -o /dev/null
+        echo "watching project_root $PROJECT_ROOT on {{.MANAGER_CHAIN}}"
+
+  # ── operator signer registration ──────────────────────────────────────
+
+  fetch-signer:
+    desc: |
+      Ask the running warpdrive node for the operator's ed25519 pubkey for
+      this service (the service must already be registered via
+      `task register-service`). Writes the full SignerResponse to
+      out/signer.json and the 32-byte ed25519 pubkey to out/signer.pubkey.
+    cmds:
+      - mkdir -p out
+      - |
+        set -euo pipefail
+        PROJECT_ROOT=$(jq -r .contracts.project_root out/deploy.json)
+        BODY=$(jq -nc --arg chain "{{.MANAGER_CHAIN}}" --arg addr "$PROJECT_ROOT" \
+            '{service_manager: {stellar: {chain: $chain, address: $addr}}}')
+        curl -sSf -X POST http://127.0.0.1:8000/services/signer \
+            -H "Content-Type: application/json" \
+            --data "$BODY" > out/signer.json
+        jq -r .ed25519.ed25519_pubkey out/signer.json > out/signer.pubkey
+        test -s out/signer.pubkey || { echo "no pubkey in signer response"; cat out/signer.json; exit 1; }
+        echo "operator pubkey: $(cat out/signer.pubkey)"
+
+  set-threshold:
+    desc: |
+      Update the consensus threshold on the ed25519-security contract.
+      Defaults to {{.THRESHOLD_NUM}}/{{.THRESHOLD_DEN}}; override with env
+      vars, e.g. `THRESHOLD_NUM=2 THRESHOLD_DEN=3 task set-threshold` for
+      2-of-3 quorum across multiple operators.
+    cmds:
+      - |
+        set -euo pipefail
+        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
+        : "${DEPLOYER_ADDRESS:?DEPLOYER_ADDRESS is required}"
+        docker run --rm \
+          --pull=always \
+          --user "$(id -u):$(id -g)" \
+          -e HOME=/tmp \
+          -e RPC_URL="{{.RPC_URL}}" \
+          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
+          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
+          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
+          -v "$PWD/out:/out" \
+          {{.MIDDLEWARE_IMAGE}} \
+          /warpdrive/cli.sh set-threshold \
+            --scheme ed25519 \
+            --numerator {{.THRESHOLD_NUM}} \
+            --denominator {{.THRESHOLD_DEN}} \
+            --deploy-file /out/deploy.json
+
+  register-signer:
+    desc: |
+      Register the operator's ed25519 pubkey on the on-chain security
+      contract and set the consensus threshold. Auto-fetches the pubkey
+      from the running node (`fetch-signer`) unless out/signer.pubkey
+      already exists.
+    cmds:
+      - test -s out/signer.pubkey || task fetch-signer
+      - |
+        set -euo pipefail
+        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
+        : "${DEPLOYER_ADDRESS:?DEPLOYER_ADDRESS is required}"
+        SIGNER_PUBKEY=$(cat out/signer.pubkey)
+        docker run --rm \
+          --pull=always \
+          --user "$(id -u):$(id -g)" \
+          -e HOME=/tmp \
+          -e RPC_URL="{{.RPC_URL}}" \
+          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
+          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
+          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
+          -v "$PWD/out:/out" \
+          {{.MIDDLEWARE_IMAGE}} \
+          /warpdrive/cli.sh add-signer \
+            --scheme ed25519 \
+            --key "$SIGNER_PUBKEY" \
+            --weight {{.SIGNER_WEIGHT}} \
+            --deploy-file /out/deploy.json
+        docker run --rm \
+          --pull=always \
+          --user "$(id -u):$(id -g)" \
+          -e HOME=/tmp \
+          -e RPC_URL="{{.RPC_URL}}" \
+          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
+          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
+          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
+          -v "$PWD/out:/out" \
+          {{.MIDDLEWARE_IMAGE}} \
+          /warpdrive/cli.sh set-threshold \
+            --scheme ed25519 \
+            --numerator {{.THRESHOLD_NUM}} \
+            --denominator {{.THRESHOLD_DEN}} \
+            --deploy-file /out/deploy.json
+
+  # ── multi-operator IPFS publishing (optional) ─────────────────────────
+
+  pin-service:
+    desc: |
+      Pin service/service.json to Pinata and write the resulting CID to
+      out/service.cid. Requires PINATA_JWT env var (get one from
+      https://app.pinata.cloud > API Keys > New key with the
+      pinFileToIPFS permission). Use after `task build-service`.
+    cmds:
+      - mkdir -p out
+      - |
+        set -euo pipefail
+        : "${PINATA_JWT:?PINATA_JWT is required}"
+        CID=$(curl -sSf -X POST https://api.pinata.cloud/pinning/pinFileToIPFS \
+            -H "Authorization: Bearer $PINATA_JWT" \
+            -F "file=@{{.SERVICE_FILE}}" \
+            -F 'pinataMetadata={"name":"oracle-demo-service.json"}' \
+            | jq -r .IpfsHash)
+        test -n "$CID" && test "$CID" != "null" \
+            || { echo "no CID returned from Pinata"; exit 1; }
+        echo "$CID" > out/service.cid
+        echo "service pinned: ipfs://$CID"
+        echo "(public gateway: https://gateway.pinata.cloud/ipfs/$CID )"
+
+  set-service-spec:
+    desc: |
+      Point the on-chain project_root at a service spec URL. Requires
+      SERVICE_URI env var (typically `ipfs://$(cat out/service.cid)` from
+      `task pin-service`). All operator nodes poll project_root and will
+      auto-fetch the spec via their configured `[warpdrive] ipfs_gateway`.
+    cmds:
+      - |
+        set -euo pipefail
+        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required}"
+        : "${DEPLOYER_ADDRESS:?DEPLOYER_ADDRESS is required}"
+        : "${SERVICE_URI:?SERVICE_URI is required}"
+        docker run --rm \
+          --pull=always \
+          --user "$(id -u):$(id -g)" \
+          -e HOME=/tmp \
+          -e RPC_URL="{{.RPC_URL}}" \
+          -e NETWORK_PASSPHRASE="{{.NETWORK_PASSPHRASE}}" \
+          -e DEPLOYER_SECRET="$DEPLOYER_SECRET" \
+          -e DEPLOYER_ADDRESS="$DEPLOYER_ADDRESS" \
+          -v "$PWD/out:/out" \
+          {{.MIDDLEWARE_IMAGE}} \
+          /warpdrive/cli.sh set-project-spec-repo \
+            --repo "$SERVICE_URI" \
+            --deploy-file /out/deploy.json
+
+  publish-service:
+    desc: |
+      Multi-operator one-shot: pin service.json to Pinata, then point the
+      on-chain project_root at the resulting URI. All warpdrive nodes
+      polling project_root.service_uri() will pick the new spec up on
+      their next chain query. Requires PINATA_JWT + DEPLOYER_SECRET +
+      DEPLOYER_ADDRESS.
+    cmds:
+      - task: pin-service
+      - |
+        set -euo pipefail
+        SERVICE_URI=ipfs://$(cat out/service.cid)
+        echo "registering $SERVICE_URI on project_root"
+        SERVICE_URI="$SERVICE_URI" task set-service-spec
+
+  # ── node runtime ──────────────────────────────────────────────────────
+
+  run-node:
+    desc: |
+      Run a single-operator warpdrive node locally using the warpdrive.toml
+      in this repo. Requires WARPDRIVE_SIGNING_MNEMONIC (BIP39 — see
+      Taskfile header for how to generate) and DEPLOYER_SECRET (the
+      testnet S-seed, reused as the Stellar aggregator credential).
+      Long-lived; run in its own terminal.
+    cmds:
+      - mkdir -p out/node-data
+      - |
+        set -euo pipefail
+        : "${WARPDRIVE_SIGNING_MNEMONIC:?WARPDRIVE_SIGNING_MNEMONIC is required}"
+        : "${DEPLOYER_SECRET:?DEPLOYER_SECRET is required (used as WARPDRIVE_AGGREGATOR_STELLAR_CREDENTIAL)}"
+        WARPDRIVE_HOME="$PWD" \
+        WARPDRIVE_DATA="$PWD/out/node-data" \
+        WARPDRIVE_AGGREGATOR_STELLAR_CREDENTIAL="${WARPDRIVE_AGGREGATOR_STELLAR_CREDENTIAL:-$DEPLOYER_SECRET}" \
+        warpdrive
+
+  # ── frontend ──────────────────────────────────────────────────────────
+
+  frontend-config:
+    desc: Copy out/oracle.json into frontend/public/ so the UI can fetch the contract id at runtime.
+    cmds:
+      - mkdir -p frontend/public
+      - cp out/oracle.json frontend/public/oracle.json
+      - echo "wrote frontend/public/oracle.json -> $(jq -r .oracle frontend/public/oracle.json)"
+
+  frontend-dev:
+    desc: Install + run the Vite dev server (http://localhost:5173).
+    cmds:
+      - cd frontend && yarn install
+      - cd frontend && yarn dev
+
+  frontend-build:
+    desc: Install + produce a production frontend bundle in frontend/dist.
+    cmds:
+      - cd frontend && yarn install
+      - cd frontend && yarn build
+
+  # ── composites ────────────────────────────────────────────────────────
+
+  deploy:
+    desc: |
+      Phase 1 (no node required): build contracts + components, deploy
+      ed25519 stack + project_root, deploy the oracle handler, register
+      it with project_root. After this completes, start the node
+      (`task run-node` in another terminal), then `task wire-service`.
+    cmds:
+      - task: build-contracts
+      - task: build-components
+      - task: deploy-middleware
+      - task: deploy-oracle
+      - task: register-handler
+
+  wire-service:
+    desc: |
+      Phase 2 (requires `task run-node` running in another terminal):
+      upload all four component wasms to the node, assemble
+      service/service.json, then register it with the local node via
+      /dev/services. After this, run `task register-signer`.
+    cmds:
+      - task: upload-cron
+      - task: upload-twap
+      - task: upload-median
+      - task: upload-aggregator
+      - task: build-service
+      - task: register-service

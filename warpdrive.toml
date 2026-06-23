@@ -1,0 +1,55 @@
+# Warpdrive node config for oracle-demo.
+#
+# Single-operator dev setup by default: dev_endpoints_enabled = true so
+# `task wire-service` can POST service.json to /dev/services, and no P2P
+# block so the node runs standalone. For multi-operator deploys see the
+# P2P block at the bottom (mirrors phoenix-blend-pool / hodlers-app
+# patterns).
+
+[default]
+log_level = ["info", "warpdrive=debug"]
+
+[default.chains.stellar.testnet]
+chain_poll_interval_ms = 5000
+rpc_url = "https://soroban-testnet.stellar.org"
+network_passphrase = "Test SDF Network ; September 2015"
+friendbot_url = "https://friendbot-testnet.stellar.org/"
+
+[warpdrive]
+port = 8000
+dev_endpoints_enabled = true
+ipfs_gateway = "https://gateway.pinata.cloud/ipfs/"
+
+# Single-op default. To run a 3-operator quorum, replace this block with
+# the [warpdrive.p2p.remote] template at the bottom and set
+# bootstrap_nodes appropriately on each non-bootstrap node.
+[warpdrive.p2p.local]
+listen_port = 9000
+
+[cli]
+
+[cli.chains.stellar.testnet]
+chain_poll_interval_ms = 5000
+rpc_url = "https://soroban-testnet.stellar.org"
+network_passphrase = "Test SDF Network ; September 2015"
+friendbot_url = "https://friendbot-testnet.stellar.org/"
+
+# ── Multi-operator template ─────────────────────────────────────────────
+#
+# Replace [warpdrive.p2p.local] above with one of these:
+#
+# Bootstrap node (operator-1):
+# [warpdrive.p2p.remote]
+# listen_port = 9000
+# bootstrap_nodes = []
+#
+# Follower nodes (operator-2 / operator-3 / ...):
+# [warpdrive.p2p.remote]
+# listen_port = 9000
+# bootstrap_nodes = [
+#     "/ip4/<operator-1-ip>/tcp/9000/p2p/<operator-1-peer-id>",
+# ]
+#
+# The peer_id is deterministic from WARPDRIVE_SIGNING_MNEMONIC at HD path
+# m/44'/60'/0'/0/0 — read it from the first run's log line
+# "Using P2P identity derived from signing_mnemonic (peer_id: 12D3KooW...)".

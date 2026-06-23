@@ -1,0 +1,60 @@
+cd /home/u/work/warpdrive/oracle-demo
+
+# ----- one-time prerequisites (skip if already installed) -----
+# - stellar CLI, docker, jq, cargo (toolchain pinned in rust-toolchain.toml)
+# - cargo install cargo-component
+# - cargo install wkg
+# - cargo install --path ../warpdrive/packages/cli --locked        # warpdrive-cli
+# - cargo install --path ../warpdrive/packages/warpdrive --locked  # warpdrive node daemon
+# - node 20+, yarn
+
+# WIT deps (one-time per clone)
+task fetch-wit
+
+# ----- 1. Mint demo identities + write .env -----
+./scripts/bootstrap-keys.sh > .env
+set -a; source .env; set +a
+
+# ----- 2. Phase 1: build everything + deploy on-chain contracts -----
+task deploy
+# -> out/deploy.json    (ed25519_security, ed25519_verification, project_root)
+# -> out/oracle.json    (the handler contract)
+# Also runs register_handler on project_root.
+
+# ----- 3. Start the warpdrive node in another terminal -----
+#   cd /home/u/work/warpdrive/oracle-demo
+#   set -a; source .env; set +a
+#   task run-node
+# Wait for "Stellar chain [stellar:testnet] is healthy". Leave it running.
+
+# ----- 4. Phase 2: upload components, build service.json, register with node -----
+task wire-service
+# -> out/{cron,twap,median,aggregator}.digest
+# -> service/service.json
+# -> out/service.hash
+# Node log: "Initializing dispatcher: services=1, workflows=3, components=4"
+
+# ----- 5. Register operator pubkey + set 1/1 threshold on the security contract -----
+task register-signer
+# -> out/signer.json, out/signer.pubkey
+
+# ----- 6. Hand the oracle contract id to the frontend, then run the UI -----
+task frontend-config
+task frontend-dev    # http://localhost:5173
+
+# Done. The node is now:
+# - polling CoinGecko every 10 min (fetch_prices workflow)
+# - watching OracleContract for "twapreq" events (compute_twap workflow)
+# - watching OracleContract for "r2ready" events (compute_median workflow)
+#
+# Use the UI to call request_twap(asset, range_secs); within seconds you
+# should see a Round2Ready, then a Finalized event from the same contract.
+
+# ----- Verify final TWAP for a request id manually -----
+# REQUEST_ID=42
+# ORACLE=$(jq -r .oracle out/oracle.json)
+# stellar contract invoke --id "$ORACLE" \
+#   --rpc-url https://soroban-testnet.stellar.org \
+#   --network-passphrase "Test SDF Network ; September 2015" \
+#   --source "$DEPLOYER_SECRET" \
+#   -- final_twap --request_id "$REQUEST_ID"

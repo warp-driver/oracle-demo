@@ -15,5 +15,4 @@ warpdrive-shared = "0.2.4"
 [dev-dependencies]
 soroban-sdk = { version = "26", features = ["testutils"] }
 warpdrive-shared = { version = "0.2.4", features = ["testutils"] }
-[profile.release]
-overflow-checks = true
+

@@ -33,7 +33,7 @@ use soroban_sdk::{
     Bytes, BytesN, Env, String, Symbol, Vec,
 };
 use warpdrive_shared::interfaces::{
-    handler::{Ed25519SignatureData, MessageWithId, XlmEnvelope},
+    handler::{Ed25519SignatureData, XlmEnvelope},
     verification::Ed25519VerificationClient,
 };
 
@@ -242,14 +242,11 @@ impl OracleContract {
             Err(Err(_)) => return Err(OracleError::OtherInvocationError),
         }
 
-        // Inner payload decode.
-        let inner = MessageWithId::from_xdr(&env, &envelope.payload)
-            .map_err(|_| OracleError::InvalidEnvelope)?;
-        let payload = Round2Payload::from_xdr(&env, &inner.message)
+        // Decode payload directly off the envelope — we don't use the
+        // `MessageWithId` wrapper here because Round 2 payloads already
+        // carry the request_id field. Same pattern hodlers-app uses.
+        let payload = Round2Payload::from_xdr(&env, &envelope.payload)
             .map_err(|_| OracleError::InvalidRound2Payload)?;
-        if inner.trigger_id != payload.request_id {
-            return Err(OracleError::InvalidRound2Payload);
-        }
 
         let info = storage::get_request(&env, payload.request_id)
             .ok_or(OracleError::UnknownRequest)?;
@@ -329,13 +326,8 @@ impl OracleContract {
             Err(Err(_)) => return Err(OracleError::OtherInvocationError),
         }
 
-        let inner = MessageWithId::from_xdr(&env, &envelope.payload)
-            .map_err(|_| OracleError::InvalidEnvelope)?;
-        let payload = FinalPayload::from_xdr(&env, &inner.message)
+        let payload = FinalPayload::from_xdr(&env, &envelope.payload)
             .map_err(|_| OracleError::InvalidFinalPayload)?;
-        if inner.trigger_id != payload.request_id {
-            return Err(OracleError::InvalidFinalPayload);
-        }
 
         let info = storage::get_request(&env, payload.request_id)
             .ok_or(OracleError::UnknownRequest)?;
