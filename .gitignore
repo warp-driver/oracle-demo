@@ -7,5 +7,5 @@ dist/
 wit-definitions/wit/deps/
 frontend/node_modules/
 frontend/dist/
-frontend/tsconfig.tsbuildinfo
+frontend/*.tsbuildinfo
 frontend/vite.config.d.ts
