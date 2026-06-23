@@ -30,7 +30,7 @@ const TOPIC_FINALIZED = "finaltwp";
 
 // ─── domain types ────────────────────────────────────────────────────
 
-export type Asset = "btc-usd" | "eth-usd";
+export type Asset = "btc_usd" | "eth_usd";
 
 export interface Attestation {
   signer: Uint8Array;

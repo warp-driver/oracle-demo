@@ -15,8 +15,8 @@ const WINDOW_SECS: u64 = 25 * 3600;
 /// the bucket. Uses `wasi:keyvalue/atomics` CAS so overlapping cron firings
 /// compose without dropping each other's writes.
 ///
-/// `asset` is `"btc-usd"` or `"eth-usd"`; the storage key is
-/// `samples/<asset>` and is read verbatim by the twap-circuit.
+/// `asset` is `"btc_usd"` or `"eth_usd"` (Soroban Symbol charset); the
+/// storage key is `samples/<asset>` and is read verbatim by the twap-circuit.
 pub fn append(asset: &str, ts: u64, price_e7: i128) -> Result<()> {
     let bucket = store::open(&BUCKET.to_string())
         .map_err(|e| anyhow!("open kv bucket `{BUCKET}`: {e:?}"))?;

@@ -18,8 +18,8 @@ pub fn fetch_now() -> Result<Vec<(&'static str, u64, i128)>> {
     let body: serde_json::Value = block_on(async { fetch_json(URL).await })
         .context("coingecko GET failed")?;
     Ok(vec![
-        extract(&body, "bitcoin", "btc-usd")?,
-        extract(&body, "ethereum", "eth-usd")?,
+        extract(&body, "bitcoin", "btc_usd")?,
+        extract(&body, "ethereum", "eth_usd")?,
     ])
 }
 

@@ -10,8 +10,8 @@ interface RequestFormProps {
 }
 
 const ASSETS: { value: Asset; label: string }[] = [
-  { value: "btc-usd", label: "BTC-USD" },
-  { value: "eth-usd", label: "ETH-USD" },
+  { value: "btc_usd", label: "BTC-USD" },
+  { value: "eth_usd", label: "ETH-USD" },
 ];
 
 const RANGES: { value: number; label: string }[] = [
@@ -26,7 +26,7 @@ export function RequestForm({
   onRequest,
   onError,
 }: RequestFormProps) {
-  const [asset, setAsset] = useState<Asset>("btc-usd");
+  const [asset, setAsset] = useState<Asset>("btc_usd");
   const [rangeSecs, setRangeSecs] = useState<number>(3600);
   const [submitting, setSubmitting] = useState(false);
   const [hint, setHint] = useState<string | null>(null);

@@ -98,14 +98,15 @@ pub fn parse_twap_request(topic_segments: &[String], value: &str) -> Result<Twap
 }
 
 /// Fold a contract-side asset symbol into the canonical KV-bucket key.
-/// The contract currently emits "btc-usd" / "eth-usd"; a future tweak
-/// might shorten that to "btc" / "eth", so we accept both forms and
-/// always look up the canonical "<sym>-usd" key the cron-circuit writes.
+/// The contract emits `"btc_usd"` / `"eth_usd"` (Soroban Symbols can't
+/// contain hyphens, only `[a-zA-Z0-9_]`); we also accept the short
+/// `"btc"` / `"eth"` aliases as a courtesy and fold them into the same
+/// canonical key the cron-circuit writes.
 pub fn key_for(asset: &str) -> String {
     let lower = asset.to_ascii_lowercase();
     match lower.as_str() {
-        "btc" => "btc-usd".to_string(),
-        "eth" => "eth-usd".to_string(),
+        "btc" => "btc_usd".to_string(),
+        "eth" => "eth_usd".to_string(),
         _ => lower,
     }
 }

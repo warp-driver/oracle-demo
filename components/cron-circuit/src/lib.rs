@@ -23,7 +23,7 @@
 //!
 //! Persistence: appends `Sample { ts, price_e7 }` (bincode 1.3, positional
 //! `u64 || i128` little-endian) to bucket `"oracle-cron-samples"` under
-//! keys `"samples/btc-usd"` / `"samples/eth-usd"`. Each tick prunes any
+//! keys `"samples/btc_usd"` / `"samples/eth_usd"`. Each tick prunes any
 //! sample older than 25 h relative to the freshest entry so the twap
 //! circuit can serve any window up to 24 h with one extra hour of slack.
 

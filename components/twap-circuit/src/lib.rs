@@ -27,7 +27,7 @@ use warpdrive::vectr::input::TriggerData;
 /// strings, and the median-circuit consumes the same alphabet. The
 /// `trigger::key_for` helper folds short variants ("btc",
 /// "eth") into these canonical keys before any bucket lookup.
-pub const ASSETS: &[&str] = &["btc-usd", "eth-usd"];
+pub const ASSETS: &[&str] = &["btc_usd", "eth_usd"];
 
 struct Component;
 
