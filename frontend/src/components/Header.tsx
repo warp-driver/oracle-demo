@@ -6,8 +6,7 @@ import {
 } from "../lib/freighter";
 import { shortStrkey } from "../lib/oracle";
 import {
-  DEMO_MESSAGE,
-  connectAndSign as connectMetaMaskAndSign,
+  connectSepolia,
   isMetaMaskInstalled,
 } from "../lib/metamask";
 
@@ -17,9 +16,9 @@ interface HeaderProps {
   onError: (message: string) => void;
 }
 
-interface MetaMaskState {
-  address: string;
-  signature: string;
+function shortEth(addr: string): string {
+  if (addr.length <= 12) return addr;
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 export function Header({
@@ -29,7 +28,7 @@ export function Header({
 }: HeaderProps) {
   const [connecting, setConnecting] = useState(false);
   const [mmConnecting, setMmConnecting] = useState(false);
-  const [mm, setMm] = useState<MetaMaskState | null>(null);
+  const [mmAddress, setMmAddress] = useState<string | null>(null);
   const [freighterPresent, setFreighterPresent] = useState(false);
   const [metaMaskPresent, setMetaMaskPresent] = useState(false);
 
@@ -58,10 +57,11 @@ export function Header({
   }
 
   async function handleMetaMaskClick() {
+    if (mmAddress) return;
     setMmConnecting(true);
     try {
-      const result = await connectMetaMaskAndSign();
-      setMm(result);
+      const address = await connectSepolia();
+      setMmAddress(address);
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -74,13 +74,6 @@ export function Header({
       <div className="header-titles">
         <h1>Warp Drive Oracle</h1>
         <p>BTC/USD · ETH/USD multi-round TWAP</p>
-        {mm && (
-          <div className="metamask-sig">
-            <div>{shortStrkey(mm.address)} signed:</div>
-            <div>{DEMO_MESSAGE}</div>
-            <div>{mm.signature}</div>
-          </div>
-        )}
       </div>
       <div className="header-actions">
         {walletAddress ? (
@@ -102,19 +95,25 @@ export function Header({
             {connecting ? "Connecting…" : "Connect Freighter"}
           </button>
         )}
-        <button
-          type="button"
-          className="btn"
-          onClick={handleMetaMaskClick}
-          disabled={mmConnecting || !metaMaskPresent}
-          title={
-            metaMaskPresent
-              ? "Connect MetaMask and sign the demo message"
-              : "MetaMask not detected"
-          }
-        >
-          {mmConnecting ? "Signing…" : mm ? "MetaMask ✓" : "Connect MetaMask"}
-        </button>
+        {mmAddress ? (
+          <button type="button" className="btn btn-connected" disabled>
+            {shortEth(mmAddress)} ✓
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn"
+            onClick={handleMetaMaskClick}
+            disabled={mmConnecting || !metaMaskPresent}
+            title={
+              metaMaskPresent
+                ? "Switch MetaMask to Sepolia and authorise the account"
+                : "MetaMask not detected"
+            }
+          >
+            {mmConnecting ? "Connecting…" : "Connect to Sepolia"}
+          </button>
+        )}
       </div>
     </header>
   );

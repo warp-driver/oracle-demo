@@ -57,6 +57,13 @@ export interface OracleEvent {
   ledgerClosedAt: Date;
   /** Decoded structured payload — exact shape varies by `kind`. */
   data: Record<string, unknown>;
+  /**
+   * Lowercase `0x`-prefixed Sepolia address that originated this
+   * request via the ETH bridge — populated only for `twap-request`
+   * events whose `TwapRequestData.originator` is `Some(BytesN<20>)`.
+   * Stellar-native requests leave this `undefined`.
+   */
+  originator?: string;
 }
 
 // ─── tiny type-guards (kept here so callers don't repeat them) ───────
@@ -84,6 +91,20 @@ function asString(v: unknown): string | null {
 function asBytes(v: unknown): Uint8Array | null {
   // node Buffer also extends Uint8Array, so this single check suffices.
   return v instanceof Uint8Array ? v : null;
+}
+
+/**
+ * Decode an `Option<BytesN<20>>` field as observed in the JS-native
+ * scVal output: `Some(bytes)` arrives as a 20-byte `Uint8Array`,
+ * `None` arrives as `null` (or absent). Returns a lowercase
+ * 0x-prefixed hex string, or `undefined` when no address is present.
+ */
+function decodeOriginator(v: unknown): string | undefined {
+  const bytes = asBytes(v);
+  if (!bytes || bytes.length !== 20) return undefined;
+  let hex = "";
+  for (const b of bytes) hex += b.toString(16).padStart(2, "0");
+  return "0x" + hex;
 }
 
 // ─── reads ───────────────────────────────────────────────────────────
@@ -323,12 +344,16 @@ export async function tailEvents(args: {
     const reqId = asBigInt(reqIdNative);
     if (reqId === null) continue;
     const value: unknown = scValToNative(ev.value);
+    const data = isRecord(value) ? value : { value };
+    const originator =
+      kind === "twap-request" ? decodeOriginator(data.originator) : undefined;
     out.push({
       id: ev.id,
       kind,
       requestId: reqId,
       ledgerClosedAt: new Date(ev.ledgerClosedAt),
-      data: isRecord(value) ? value : { value },
+      data,
+      ...(originator !== undefined ? { originator } : {}),
     });
   }
   return { events: out, cursor: resp.cursor };

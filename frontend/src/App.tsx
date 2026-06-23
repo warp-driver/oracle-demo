@@ -58,6 +58,12 @@ export function App() {
   const [requestId, setRequestId] = useState<bigint | null>(null);
   const [events, setEvents] = useState<OracleEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Lowercase Sepolia address whose `TwapRequested` log we're waiting
+  // for the bridge workflow to mirror as a Stellar `twapreq` event.
+  // Cleared once a matching event arrives.
+  const [pendingMetaMaskRequester, setPendingMetaMaskRequester] = useState<
+    string | null
+  >(null);
 
   // Resolve the contract address and the already-authorised wallet
   // address on mount. Both are independent so we kick them off in
@@ -124,6 +130,22 @@ export function App() {
     };
   }, [oracleId]);
 
+  // Resolve the pending MetaMask request once the bridge workflow
+  // mirrors the Sepolia log as a Stellar `twap-request` event. We
+  // match by `originator` (lowercase 0x-hex) and adopt the contract's
+  // newly-minted `requestId` so Round 2 / Final cards start tracking.
+  useEffect(() => {
+    if (!pendingMetaMaskRequester) return;
+    const target = pendingMetaMaskRequester.toLowerCase();
+    for (const ev of events) {
+      if (ev.kind !== "twap-request") continue;
+      if (ev.originator?.toLowerCase() !== target) continue;
+      setRequestId(ev.requestId);
+      setPendingMetaMaskRequester(null);
+      return;
+    }
+  }, [events, pendingMetaMaskRequester]);
+
   return (
     <div className="app">
       <Header
@@ -149,6 +171,10 @@ export function App() {
         oracleId={oracleId?.contractId ?? null}
         walletAddress={walletAddress}
         onRequest={(id) => setRequestId(id)}
+        onMetaMaskRequest={(requester) => {
+          setRequestId(null);
+          setPendingMetaMaskRequester(requester);
+        }}
         onError={setError}
       />
 
