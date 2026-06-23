@@ -155,6 +155,50 @@ warpdrive-cli service -f "$SERVICE_FILE" workflow submit \
     --values "chain=$TRIGGER_CHAIN" \
     --values "service_handler=$ORACLE"
 
+# ── workflow 4 (optional): bridge_eth_request ─────────────────────────
+#
+# Sepolia TwapTrigger.request → eth-bridge-circuit emits a
+# SubmissionPayload::BridgeTrigger → OracleContract's `verify_xlm`
+# dispatch arm constructs a RequestInfo with `origin = Some(eth_sender)`
+# and emits the standard `twapreq` event. From there the existing
+# compute_twap → compute_median pipeline is identical.
+#
+# Only added when the user has actually deployed the Sepolia trigger
+# (`task deploy-eth-trigger` writes out/eth-trigger.json) AND uploaded
+# the bridge wasm to this operator (`task upload-eth-bridge` writes
+# out/eth-bridge.digest). In Stellar-only mode this block is skipped
+# silently and the service still works for the Freighter path.
+if [ -f out/eth-trigger.json ] && [ -f out/eth-bridge.digest ]; then
+    ETH_ADDRESS=$(jq -r .address out/eth-trigger.json)
+    ETH_EVENT_HASH=$(jq -r .event_hash out/eth-trigger.json)
+    ETH_DIGEST=$(cat out/eth-bridge.digest)
+
+    warpdrive-cli service -f "$SERVICE_FILE" workflow add --id bridge_eth_request
+
+    warpdrive-cli service -f "$SERVICE_FILE" workflow trigger \
+        --id bridge_eth_request set-evm \
+        --address "$ETH_ADDRESS" \
+        --chain evm:sepolia \
+        --event-hash "$ETH_EVENT_HASH"
+
+    warpdrive-cli service -f "$SERVICE_FILE" workflow component \
+        --id bridge_eth_request set-source-digest --digest "$ETH_DIGEST"
+
+    # No HTTP / FS perms — the bridge circuit only decodes its trigger.
+    warpdrive-cli service -f "$SERVICE_FILE" workflow submit \
+        --id bridge_eth_request set-stellar \
+        --chain "$TRIGGER_CHAIN" \
+        --contract-id "$ORACLE"
+
+    warpdrive-cli service -f "$SERVICE_FILE" workflow aggregator \
+        --id bridge_eth_request set-source-digest --digest "$AGG_DIGEST"
+
+    warpdrive-cli service -f "$SERVICE_FILE" workflow aggregator \
+        --id bridge_eth_request config \
+        --values "chain=$TRIGGER_CHAIN" \
+        --values "service_handler=$ORACLE"
+fi
+
 # ── service manager points at on-chain project_root ───────────────────
 
 warpdrive-cli service -f "$SERVICE_FILE" manager set-stellar \

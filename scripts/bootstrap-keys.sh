@@ -58,3 +58,19 @@ if [ -n "${COINGECKO_API_KEY:-}" ]; then
 else
     echo "# COINGECKO_API_KEY=CG-xxxxxxxxxxxxxxxx   # demo key — uncomment to lift the public 429 cap"
 fi
+
+# Sepolia bridge — only needed if you want the MetaMask request path
+# (see README § Triggering via MetaMask). The deployer key is used ONCE
+# by `task deploy-eth-trigger` to deploy contracts/eth-trigger/TwapTrigger.sol;
+# regular MetaMask users do NOT need this key, just Sepolia ETH in their
+# own wallet.
+if [ -n "${SEPOLIA_RPC_URL:-}" ]; then
+    echo "SEPOLIA_RPC_URL=$SEPOLIA_RPC_URL"
+else
+    echo "# SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com"
+fi
+if [ -n "${SEPOLIA_DEPLOYER_KEY:-}" ]; then
+    echo "SEPOLIA_DEPLOYER_KEY=$SEPOLIA_DEPLOYER_KEY"
+else
+    echo "# SEPOLIA_DEPLOYER_KEY=0x_funded_secp256k1_secret   # uncomment + fund via https://sepoliafaucet.com"
+fi

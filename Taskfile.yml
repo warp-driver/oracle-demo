@@ -231,6 +231,52 @@ tasks:
         scripts/upload-component.sh "$OP_URL" {{.AGGREGATOR_WASM}} > out/aggregator.digest
         echo "op ${OP_INDEX} aggregator digest: $(cat out/aggregator.digest)"
 
+  deploy-eth-trigger:
+    desc: |
+      Deploy contracts/eth-trigger/TwapTrigger.sol to Sepolia via
+      forge create. Writes out/eth-trigger.json = { address, event_hash,
+      chain_id, rpc_url }. Requires:
+        SEPOLIA_RPC_URL          # https://ethereum-sepolia-rpc.publicnode.com works
+        SEPOLIA_DEPLOYER_KEY     # 0x-prefixed hex private key, funded on Sepolia via https://sepoliafaucet.com
+      Idempotent in the sense that re-running just deploys a new instance;
+      the dispatcher only cares about the address recorded in service.json.
+    cmds:
+      - mkdir -p out
+      - |
+        set -euo pipefail
+        : "${SEPOLIA_RPC_URL:?SEPOLIA_RPC_URL is required}"
+        : "${SEPOLIA_DEPLOYER_KEY:?SEPOLIA_DEPLOYER_KEY is required (funded Sepolia secp256k1 secret)}"
+        cd contracts/eth-trigger
+        forge create src/TwapTrigger.sol:TwapTrigger \
+            --rpc-url "$SEPOLIA_RPC_URL" \
+            --private-key "$SEPOLIA_DEPLOYER_KEY" \
+            --broadcast --json > ../../out/eth-trigger-deploy.json
+        cd ../..
+        ADDR=$(jq -r .deployedTo out/eth-trigger-deploy.json)
+        EVENT_HASH=$(cast keccak "TwapRequested(string,uint32,address)" | sed s/^0x//)
+        jq -nc --arg a "$ADDR" --arg h "$EVENT_HASH" --arg r "$SEPOLIA_RPC_URL" \
+            '{address:$a, event_hash:$h, chain_id:"11155111", rpc_url:$r}' \
+            > out/eth-trigger.json
+        echo "deployed at $ADDR"
+        echo "event hash: $EVENT_HASH"
+
+  build-eth-bridge:
+    desc: Build eth-bridge-circuit (bridges Sepolia TwapRequested events into Stellar verify_xlm) as a WASI 0.2 component.
+    cmds:
+      - cargo component build --release --manifest-path components/eth-bridge-circuit/Cargo.toml
+
+  upload-eth-bridge:
+    desc: Upload eth-bridge-circuit wasm to operator OP (default 1); writes digest to out/eth-bridge.digest.
+    deps: [build-eth-bridge]
+    cmds:
+      - mkdir -p out
+      - |
+        . scripts/op-env.sh
+        scripts/upload-component.sh "$OP_URL" \
+            components/eth-bridge-circuit/target/wasm32-wasip1/release/eth_bridge_circuit.wasm \
+            > out/eth-bridge.digest
+        echo "op ${OP_INDEX} eth-bridge digest: $(cat out/eth-bridge.digest)"
+
   # ── service.json + node registration ──────────────────────────────────
 
   build-service:
@@ -539,11 +585,22 @@ tasks:
   # ── frontend ──────────────────────────────────────────────────────────
 
   frontend-config:
-    desc: Copy out/oracle.json into frontend/public/ so the UI can fetch the contract id at runtime.
+    desc: |
+      Copy out/oracle.json into frontend/public/ so the UI can fetch the
+      contract id at runtime. If out/eth-trigger.json exists (Sepolia
+      bridge wired up), also copy that so the frontend's MetaMask path
+      can read the Sepolia trigger address + RPC URL.
     cmds:
       - mkdir -p frontend/public
       - cp out/oracle.json frontend/public/oracle.json
       - echo "wrote frontend/public/oracle.json -> $(jq -r .oracle frontend/public/oracle.json)"
+      - |
+        if [ -f out/eth-trigger.json ]; then
+            cp out/eth-trigger.json frontend/public/eth-trigger.json
+            echo "wrote frontend/public/eth-trigger.json -> $(jq -r .address frontend/public/eth-trigger.json)"
+        else
+            echo "no out/eth-trigger.json — Stellar-only mode (Sepolia bridge skipped)"
+        fi
 
   frontend-dev:
     desc: Install + run the Vite dev server (http://localhost:5173).
@@ -591,6 +648,12 @@ tasks:
             OP=$i task upload-twap
             OP=$i task upload-median
             OP=$i task upload-aggregator
+            # Optional bridge wasm — only uploaded when the Sepolia trigger
+            # is in play. Without out/eth-trigger.json the bridge_eth_request
+            # workflow is silently omitted from service.json downstream.
+            if [ -f out/eth-trigger.json ]; then
+                OP=$i task upload-eth-bridge
+            fi
         done
       - task: build-service
       - |
