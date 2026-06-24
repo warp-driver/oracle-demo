@@ -1,5 +1,3 @@
-cd /home/u/work/warpdrive/oracle-demo
-
 # ----- one-time prerequisites (skip if already installed) -----
 # - stellar CLI, docker, jq, cargo (toolchain pinned in rust-toolchain.toml)
 # - cargo install cargo-component
@@ -21,14 +19,12 @@ task deploy
 # -> out/oracle.json   (the handler — quorum defaults to 1/1 = "all operators")
 
 # ----- 3. SECOND TERMINAL — operator 1 (port 8000) -----
-#   cd /home/u/work/warpdrive/oracle-demo
 #   set -a; source .env; set +a
 #   task run-node
 # Wait for "Stellar chain [stellar:testnet] is healthy"
 # and "HTTP server bound to port 8000". Leave running.
 
 # ----- 4. THIRD TERMINAL — operator 2 (port 8010) -----
-#   cd /home/u/work/warpdrive/oracle-demo
 #   set -a; source .env; set +a
 #   OP=2 task run-node
 # HTTP :8010, p2p :9010, data dir out/node-data-2.
