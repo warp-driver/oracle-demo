@@ -329,7 +329,6 @@ signed` without renting hardware. Each operator gets its own
 discover each other over mDNS on the same loopback.
 
 ```bash
-cd ~/work/warpdrive/oracle-demo
 set -a; source .env; set +a   # uses the existing DEPLOYER_SECRET
 
 # 1. Re-deploy the oracle with a 4/5 release threshold.
@@ -359,7 +358,6 @@ done
 # Terminal 1 (the one you already had running):
 #     set -a; source .env; set +a; task run-node
 # Terminals 2..5:
-#     cd ~/work/warpdrive/oracle-demo
 #     set -a; source out/op-N/.env; set +a
 #     WARPDRIVE_HOME=out/op-N WARPDRIVE_DATA=out/op-N/data \
 #         warpdrive --home out/op-N --port $((8000 + (N-1)*10))
